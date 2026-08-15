@@ -38,7 +38,24 @@ case "$cmd" in
     exec MicroXRCEAgent udp4 -p 8888
     ;;
   dashboard)
-    exec python3 /opt/drone_llm_pipeline/aero_gcs/backend_services/control_api.py --force
+    # Auto-start EVERYTHING the operator needs — no extra terminals:
+    #   * control_api  (:8000) — orchestrates the sim + missions
+    #   * the dashboard UI (:3000) — static site
+    # The user then opens the browser and clicks START SIM; control_api brings
+    # up the uXRCE agent, PX4 SITL + Gazebo, rosbridge, telemetry and video.
+    echo "[dashboard] starting control_api (:8000) …"
+    python3 /opt/drone_llm_pipeline/aero_gcs/backend_services/control_api.py --force \
+        > /tmp/control_api.log 2>&1 &
+    # If the backend dies, take the container down too (so failures are visible).
+    api_pid=$!
+    sleep 2
+    echo "────────────────────────────────────────────────────────"
+    echo "  AEGIS / AERO-GCS dashboard  →  http://localhost:3000/"
+    echo "  (open it, pick a world, press START SIM to launch Gazebo)"
+    echo "────────────────────────────────────────────────────────"
+    # Serve the built UI in the foreground (keeps the container alive).
+    cd "${FRONTEND_DIR:-/opt/frontend_dist}"
+    exec python3 -m http.server 3000 --bind 0.0.0.0
     ;;
   mission)
     shift

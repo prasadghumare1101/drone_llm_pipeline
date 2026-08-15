@@ -15,6 +15,34 @@ This image bakes the **entire stack** — nothing is installed on the host:
 The host provides only: the **Linux kernel**, an **X server** (to show the Gazebo
 window), and optionally an **NVIDIA GPU** for smooth rendering.
 
+---
+
+## ⭐ Pull-and-run (no build, no terminals)
+
+Once the image is published to GHCR (via the GitHub Actions workflow, or your own
+`docker push`), the whole system is **one command**:
+
+```bash
+xhost +local:root                         # let the container use your display
+curl -sSL https://raw.githubusercontent.com/prasadghumare1101/drone_llm_pipeline/main/docker/run_dashboard.sh | bash
+```
+or, if you have the repo checked out:
+```bash
+export HF_TOKEN=hf_xxxxx                   # optional, for the LLM
+./docker/run_dashboard.sh                  # pulls the image if needed, starts everything
+```
+
+Then **open http://localhost:3000/** and press **START SIM**. That's it:
+- the container auto-starts the dashboard backend (`control_api`) and the UI,
+- pressing START SIM launches the uXRCE agent, PX4 SITL, **Gazebo Classic (GUI)**,
+  rosbridge, telemetry and video — all inside the container,
+- you fly missions from the dashboard. No manual terminals, no native installs.
+
+`run_dashboard.sh` defaults to `ghcr.io/prasadghumare1101/drone-llm-sim:latest`.
+Override with `IMAGE=<your-image> ./docker/run_dashboard.sh`.
+
+---
+
 > **Reality check.** This is a big image (~8–10 GB) and the first build takes
 > **30–45 min** (PX4 compiles from source). It was authored carefully from PX4's
 > canonical build recipe but has **not** been built on this machine (Docker isn't
