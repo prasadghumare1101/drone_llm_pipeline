@@ -1,0 +1,271 @@
+[0/4] Performing build step for 'sitl_gazebo-classic'
+ninja: no work to do.
+[2/4] No install step for 'sitl_gazebo-classic'
+[3/4] Completed 'sitl_gazebo-classic'
+[3/4] cd /home/prasad/PX4-Autopilot/build/px4_sitl_default/src/modules/simulation/simulator_mavlink && /home/prasad/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_run.sh /home/prasad/PX4-Autopilot/build/px4_sitl_default/bin/px4 none typhoon_h480 ksql_airport /home/prasad/PX4-Autopilot /home/prasad/PX4-Autopilot/build/px4_sitl_default
+SITL ARGS
+sitl_bin: /home/prasad/PX4-Autopilot/build/px4_sitl_default/bin/px4
+debugger: none
+model: typhoon_h480
+world: ksql_airport
+src_path: /home/prasad/PX4-Autopilot
+build_path: /home/prasad/PX4-Autopilot/build/px4_sitl_default
+GAZEBO_PLUGIN_PATH :/home/prasad/PX4-Autopilot/build/px4_sitl_default/build_gazebo-classic
+GAZEBO_MODEL_PATH /home/prasad/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models:/home/prasad/.gazebo/models:/home/prasad/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models
+LD_LIBRARY_PATH /usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/home/prasad/PX4-Autopilot/build/px4_sitl_default/build_gazebo-classic
+Using: /home/prasad/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/typhoon_h480/typhoon_h480.sdf
+12.40
+SITL COMMAND: "/home/prasad/PX4-Autopilot/build/px4_sitl_default/bin/px4" -d "/home/prasad/PX4-Autopilot/build/px4_sitl_default"/etc
+
+______  __   __    ___ 
+| ___ \ \ \ / /   /   |
+| |_/ /  \ V /   / /| |
+|  __/   /   \  / /_| |
+| |     / /^\ \ \___  |
+\_|     \/   \/     |_/
+
+px4 starting.
+
+INFO  [px4] startup script: /bin/sh etc/init.d-posix/rcS 0
+INFO  [init] found model autostart file as SYS_AUTOSTART=6011
+INFO  [param] selected parameter default file parameters.bson
+INFO  [param] importing from 'parameters.bson'
+INFO  [parameters] BSON document size 702 bytes, decoded 702 bytes (INT32:22, FLOAT:12)
+INFO  [param] selected parameter backup file parameters_backup.bson
+  SYS_AUTOCONFIG: curr: 0 -> new: 1
++ SYS_AUTOSTART: curr: 10015 -> new: 6011
+  SENS_BOARD_X_OFF: curr: 0.0000 -> new: 0.0000
+  SENS_DPRES_OFF: curr: 0.0000 -> new: 0.0010
+INFO  [dataman] data manager file './dataman' size is 1208528 bytes
+INFO  [init] PX4_SIM_HOSTNAME: localhost
+INFO  [simulator_mavlink] Waiting for simulator to accept connection on TCP port 4560
+INFO  [simulator_mavlink] Simulator connected on TCP port 4560.
+INFO  [lockstep_scheduler] setting initial absolute time to 848000 us
+Gazebo multi-robot simulator, version 11.10.2
+Copyright (C) 2012 Open Source Robotics Foundation.
+Released under the Apache 2 License.
+http://gazebosim.org
+
+INFO  [commander] LED: open /dev/led0 failed (22)
+INFO  [uxrce_dds_client] init UDP agent IP:127.0.0.1, port:8888
+INFO  [mavlink] mode: Normal, data rate: 4000000 B/s on udp port 18570 remote port 14550
+INFO  [mavlink] mode: Onboard, data rate: 4000000 B/s on udp port 14580 remote port 14540
+INFO  [mavlink] mode: Onboard, data rate: 4000 B/s on udp port 14280 remote port 14030
+INFO  [mavlink] mode: Gimbal, data rate: 400000 B/s on udp port 13030 remote port 13280
+INFO  [mavlink] mode: Onboard, data rate: 4000 B/s on udp port 14558 remote port 14530
+INFO  [logger] logger started (mode=all)
+INFO  [logger] Start file log (type: full)
+INFO  [logger] [logger] ./log/2026-08-14/17_36_45.ulg	
+INFO  [logger] Opened full log file: ./log/2026-08-14/17_36_45.ulg
+INFO  [mavlink] MAVLink only on localhost (set param MAV_{i}_BROADCAST = 1 to enable network)
+INFO  [mavlink] MAVLink only on localhost (set param MAV_{i}_BROADCAST = 1 to enable network)
+INFO  [px4] Startup script returned successfully
+INFO  [mavlink] partner IP: 127.0.0.1
+[1;32m[Msg] [0m[1;32mWaiting for master.[0m[1;32m
+[0m[1;32m[0m[1;32m[0m[1;32m[Msg] [0m[1;32mConnected to gazebo master @ [0m[1;32mhttp://127.0.0.1:11345[0m[1;32m
+[0m[1;32m[0m[1;32m[0m[1;32m[Msg] [0m[1;32mPublicized address: [0m[1;32m192.168.1.7[0m[1;32m
+[0m[1;32m[0m[1;32m[0m[1;33m[Wrn] [ModelDatabase.cc:212] [0m[1;33mUnable to connect to model database using [[0m[1;33m//database.config[0m[1;33m]. Only locally installed models will be available.
+[0mINFO  [tone_alarm] home set
+[1;33m[Wrn] [Event.cc:61] [0m[1;33mWarning: Deleting a connection right after creation. [0m[1;33mMake sure to save the ConnectionPtr from a Connect call
+[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0m[1;33m[Wrn] [ColladaLoader.cc:1928] [0m[1;33mTriangle input semantic: '[0m[1;33mCOLOR[0m[1;33m' is currently[0m[1;33m not supported[0m[1;33m
+[0m[1;33m[0m[1;33m[0mINFO  [uxrce_dds_client] synchronized with time offset 1786729004941268us
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/register_ext_component_reply data writer, topic id: 205
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/arming_check_request_v1 data writer, topic id: 16
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/mode_completed data writer, topic id: 157
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/battery_status_v1 data writer, topic id: 20
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/collision_constraints data writer, topic id: 27
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/estimator_status_flags data writer, topic id: 85
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/failsafe_flags data writer, topic id: 91
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/manual_control_setpoint data writer, topic id: 148
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/message_format_response data writer, topic id: 154
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/position_setpoint_triplet data writer, topic id: 192
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/sensor_combined data writer, topic id: 225
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/timesync_status data writer, topic id: 249
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/transponder_report data writer, topic id: 252
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_land_detected data writer, topic id: 277
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_attitude data writer, topic id: 264
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_control_mode data writer, topic id: 271
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_command_ack data writer, topic id: 268
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_global_position data writer, topic id: 272
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_gps_position data writer, topic id: 274
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_local_position_v1 data writer, topic id: 278
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_odometry data writer, topic id: 283
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vehicle_status_v1 data writer, topic id: 288
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/airspeed_validated_v1 data writer, topic id: 13
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/vtol_vehicle_status data writer, topic id: 297
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/home_position_v1 data writer, topic id: 128
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/wind data writer, topic id: 299
+INFO  [uxrce_dds_client] successfully created rt/fmu/out/gimbal_device_attitude_status data writer, topic id: 110
+WARN  [health_and_arming_checks] Preflight Fail: height estimate not stable
+WARN  [health_and_arming_checks] Preflight Fail: height estimate not stable
+WARN  [health_and_arming_checks] Preflight Fail: height estimate not stable
+INFO  [commander] [32mReady for takeoff![0m
+INFO  [commander] Armed by external command	
+INFO  [tone_alarm] arming warning
+INFO  [commander] Takeoff detected	
+INFO  [mavlink] partner IP: 127.0.0.1
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+ERROR [mavlink] vehicle_command_ack lost, generation 25 -> 30
+ERROR [mavlink] vehicle_command_ack lost, generation 25 -> 30
+ERROR [mavlink] vehicle_command_ack lost, generation 25 -> 30
+ERROR [mavlink] vehicle_command_ack lost, generation 25 -> 30
+ERROR [mavlink] vehicle_command_ack lost, generation 25 -> 30
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 521 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 522 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 2504 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 525 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 512 from 255/190 to 1/100
+INFO  [gimbal] Configured primary gimbal control sysid/compid from 0/0 to 255/190
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+INFO  [mavlink] Ignore command 531 from 255/190 to 1/100
+WARN  [failsafe] Failsafe activated	
+INFO  [tone_alarm] battery warning (fast)
+ERROR [flight_mode_manager] Matching flight task was not able to run, Nav state: 2, Task: 1
+INFO  [commander] Landing detected	
+INFO  [commander] Disarmed by landing	
+INFO  [tone_alarm] notify neutral
+INFO  [logger] closed logfile, bytes written: 379548507
+INFO  [commander] Connection to ground station lost	
+
+PX4 Exiting...
+[1;33m[Wrn] [Event.cc:61] [0m[1;33mWarning: Deleting a connection right after creation. Exiting NOW.
+[0m[1;33mMake sure to save the ConnectionPtr from a Connect call
+[0mninja: build stopped: interrupted by user.
+make: *** [Makefile:227: px4_sitl] Interrupt

@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "mission_name": "bad mission speed and fence",
+  "vehicle": "drone",
+  "frame": "LOCAL_ENU_METERS",
+  "cruise_speed_mps": 45.0,
+  "commands": [
+    { "type": "TAKEOFF", "alt": 15.0 },
+    { "type": "GOTO", "x": 900.0, "y": 0.0, "alt": 15.0 },
+    { "type": "LAND" }
+  ]
+}

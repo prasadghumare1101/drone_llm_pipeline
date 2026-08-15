@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0",
+  "mission_name": "rover square lap",
+  "vehicle": "ground_robot",
+  "frame": "LOCAL_ENU_METERS",
+  "cruise_speed_mps": 0.5,
+  "commands": [
+    { "type": "GOTO", "x": 5.0, "y": 5.0, "alt": 0.0 },
+    { "type": "HOLD", "seconds": 3.0 },
+    { "type": "LOOP", "count": 1, "waypoints": [
+      { "x": 5.0, "y": -5.0, "alt": 0.0 },
+      { "x": -5.0, "y": -5.0, "alt": 0.0 },
+      { "x": -5.0, "y": 5.0, "alt": 0.0 },
+      { "x": 5.0, "y": 5.0, "alt": 0.0 }
+    ]}
+  ]
+}

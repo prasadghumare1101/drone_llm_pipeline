@@ -1,0 +1,8 @@
+# Core pipeline (runs anywhere, no ROS/PX4 needed)
+jsonschema>=4.17
+pytest>=7.0
+matplotlib>=3.5        # optional: trajectory plots from the kinematic sim
+
+# Real-rig extras (install only where used):
+# mavsdk>=1.4          # sim_bridge/mavsdk_bridge.py (PX4 SITL without ROS 2)
+# ROS 2 Humble, px4_msgs, Nav2, Gazebo Classic are apt/colcon installs — see README

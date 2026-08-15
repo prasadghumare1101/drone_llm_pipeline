@@ -1,0 +1,34 @@
+# Keep the image small + the build fast: exclude everything the core pipeline
+# does not need. (Docker copies the build context; without this it would try to
+# ship ~1.7 GB of build output, node_modules and the reference workspace.)
+
+# --- heavy ROS / build artifacts (not used by the portable core) ---
+build/
+install/
+log/
+src/
+
+
+
+# --- the ROS-dependent dashboard (needs ROS 2 + hardware, not portable) ---
+aero_gcs/
+
+# --- other backends' native deps are apt/colcon installs, not in-image ---
+launch/
+
+# --- generated run artifacts ---
+runs/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- vcs / editor / local files ---
+.git/
+.gitignore
+.vscode/
+.claude/
+*.md
+image.png
+*.png
+Dockerfile
+.dockerignore

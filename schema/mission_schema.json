@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "mission_schema.json",
+  "title": "MissionPlan",
+  "description": "Validated mission plan contract. Conventions (documented defaults): frame is a local tangent plane centred on the home/arming point, LOCAL_ENU_METERS (x = East, y = North, alt = metres above home, positive up). Units: metres, metres/second, seconds. Command whitelist: TAKEOFF, GOTO, LOOP, HOLD, LAND, RTL. Numeric safety limits (max altitude/speed/geofence/loop counts) are enforced by validator/safety_limits.py, not duplicated here; this schema enforces structure, types and the command whitelist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mission_name", "vehicle", "frame", "cruise_speed_mps", "commands"],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.0"] },
+    "mission_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[A-Za-z0-9 _\\-]+$"
+    },
+    "vehicle": { "type": "string", "enum": ["drone", "ground_robot"] },
+    "frame": { "type": "string", "enum": ["LOCAL_ENU_METERS"] },
+    "cruise_speed_mps": { "type": "number", "exclusiveMinimum": 0 },
+    "notes": { "type": "string", "maxLength": 500 },
+    "commands": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/definitions/command" }
+    }
+  },
+  "definitions": {
+    "waypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "alt"],
+      "properties": {
+        "x":   { "type": "number" },
+        "y":   { "type": "number" },
+        "alt": { "type": "number", "minimum": 0 }
+      }
+    },
+    "command": {
+      "oneOf": [
+        { "$ref": "#/definitions/cmd_takeoff" },
+        { "$ref": "#/definitions/cmd_goto" },
+        { "$ref": "#/definitions/cmd_loop" },
+        { "$ref": "#/definitions/cmd_hold" },
+        { "$ref": "#/definitions/cmd_land" },
+        { "$ref": "#/definitions/cmd_rtl" },
+        { "$ref": "#/definitions/cmd_grid" },
+        { "$ref": "#/definitions/cmd_orbit" },
+        { "$ref": "#/definitions/cmd_spiral" },
+        { "$ref": "#/definitions/cmd_capture" },
+        { "$ref": "#/definitions/cmd_record" },
+        { "$ref": "#/definitions/cmd_gimbal" }
+      ]
+    },
+    "cmd_grid": {
+      "description": "Declarative lawnmower survey. The EXECUTOR expands this into waypoints deterministically; the model states intent only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "center_x", "center_y", "width", "height", "spacing", "alt"],
+      "properties": {
+        "type":      { "const": "GRID" },
+        "center_x":  { "type": "number" },
+        "center_y":  { "type": "number" },
+        "width":     { "type": "number", "exclusiveMinimum": 0 },
+        "height":    { "type": "number", "exclusiveMinimum": 0 },
+        "spacing":   { "type": "number", "exclusiveMinimum": 0 },
+        "alt":       { "type": "number", "minimum": 0 },
+        "heading_deg": { "type": "number", "minimum": -360, "maximum": 360 },
+        "speed_mps": { "type": "number", "exclusiveMinimum": 0 },
+        "capture":   { "type": "boolean" }
+      }
+    },
+    "cmd_orbit": {
+      "description": "Circle a point. Expanded to a waypoint ring by the executor.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "x", "y", "alt", "radius"],
+      "properties": {
+        "type":   { "const": "ORBIT" },
+        "x":      { "type": "number" },
+        "y":      { "type": "number" },
+        "alt":    { "type": "number", "minimum": 0 },
+        "radius": { "type": "number", "exclusiveMinimum": 0 },
+        "turns":  { "type": "integer", "minimum": 1 },
+        "points_per_turn": { "type": "integer", "minimum": 3, "maximum": 72 },
+        "speed_mps": { "type": "number", "exclusiveMinimum": 0 },
+        "capture": { "type": "boolean" }
+      }
+    },
+    "cmd_spiral": {
+      "description": "Archimedean search spiral. Expanded by the executor.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "x", "y", "alt", "start_radius", "growth", "turns"],
+      "properties": {
+        "type":         { "const": "SPIRAL" },
+        "x":            { "type": "number" },
+        "y":            { "type": "number" },
+        "alt":          { "type": "number", "minimum": 0 },
+        "start_radius": { "type": "number", "exclusiveMinimum": 0 },
+        "growth":       { "type": "number" },
+        "turns":        { "type": "integer", "minimum": 1 },
+        "points_per_turn": { "type": "integer", "minimum": 3, "maximum": 72 },
+        "speed_mps":    { "type": "number", "exclusiveMinimum": 0 },
+        "capture":      { "type": "boolean" }
+      }
+    },
+    "cmd_capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type":  { "const": "CAPTURE" },
+        "label": { "type": "string", "maxLength": 40, "pattern": "^[A-Za-z0-9 _-]*$" }
+      }
+    },
+    "cmd_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "action"],
+      "properties": {
+        "type":   { "const": "RECORD" },
+        "action": { "type": "string", "enum": ["start", "stop"] }
+      }
+    },
+    "cmd_gimbal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "pitch_deg"],
+      "properties": {
+        "type":      { "const": "GIMBAL" },
+        "pitch_deg": { "type": "number", "minimum": -90, "maximum": 90 },
+        "yaw_deg":   { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "cmd_takeoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "alt"],
+      "properties": {
+        "type": { "const": "TAKEOFF" },
+        "alt":  { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "cmd_goto": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "x", "y", "alt"],
+      "properties": {
+        "type":      { "const": "GOTO" },
+        "x":         { "type": "number" },
+        "y":         { "type": "number" },
+        "alt":       { "type": "number", "minimum": 0 },
+        "speed_mps": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "cmd_loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "count", "waypoints"],
+      "properties": {
+        "type":  { "const": "LOOP" },
+        "count": { "type": "integer", "minimum": 1 },
+        "waypoints": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 50,
+          "items": { "$ref": "#/definitions/waypoint" }
+        }
+      }
+    },
+    "cmd_hold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "seconds"],
+      "properties": {
+        "type":    { "const": "HOLD" },
+        "seconds": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "cmd_land": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "LAND" } }
+    },
+    "cmd_rtl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "RTL" } }
+    }
+  }
+}

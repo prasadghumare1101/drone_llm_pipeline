@@ -1,0 +1,18 @@
+# AERO-GCS dashboard — compose file.
+#
+# This owns ONLY the frontend (static UI). The backend + PX4/ROS/Gazebo sim run
+# NATIVELY on the host (they orchestrate host processes and open the Gazebo GUI
+# on your display — see aero_gcs/DOCKER.md). Start the backend separately:
+#     cd backend_services && python3 control_api.py --force
+#
+#   docker compose up --build      ->  dashboard on http://localhost:3000/
+
+services:
+  frontend:
+    build: ./frontend
+    image: aero-gcs-frontend
+    container_name: aero-gcs-frontend
+    ports:
+      - "3000:80"          # UI on :3000. The browser calls the native backend
+                           # at localhost:8000 / :8080 / :9090 directly.
+    restart: unless-stopped

@@ -1,0 +1,35 @@
+[INFO] [launch]: All log files can be found below /home/prasad/.ros/log/2026-08-14-23-06-44-084403-prasad-604435
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [rosbridge_websocket-1]: process started with pid [604443]
+[INFO] [rosapi_node-2]: process started with pid [604445]
+[rosbridge_websocket-1] [WARN] [1786729004.667930466] [rosbridge_websocket]: The 'default_call_service_timeout' parameter is currently set to 0.0, which means service calls will block indefinitely if no response is received. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to 5.0 seconds.
+[rosbridge_websocket-1] [WARN] [1786729004.668299098] [rosbridge_websocket]: The 'call_services_in_new_thread' parameter is currently set to False, which means service calls will block the main thread. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to True.
+[rosbridge_websocket-1] [WARN] [1786729004.668771682] [rosbridge_websocket]: The 'send_action_goals_in_new_thread' parameter is currently set to False, which means sending action goals will block the main thread. Please note that in the Jazzy and later releases, the default value for this parameter will be updated to True.
+[rosbridge_websocket-1] [INFO] [1786729004.671160887] [rosbridge_websocket]: Rosbridge WebSocket server started on port 9090
+[rosbridge_websocket-1] [INFO] [1786729005.070957835] [rosbridge_websocket]: Calling services in existing thread
+[rosbridge_websocket-1] [INFO] [1786729005.071628823] [rosbridge_websocket]: Sending action goals in existing thread
+[rosbridge_websocket-1] [INFO] [1786729005.072714590] [rosbridge_websocket]: Client connected. 1 clients total.
+[rosbridge_websocket-1] [INFO] [1786729005.076369801] [rosbridge_websocket]: Calling services in existing thread
+[rosbridge_websocket-1] [INFO] [1786729005.077085953] [rosbridge_websocket]: [Client 532ec4f3-65da-466b-9505-3233a4f0a04c] Subscribed to /gcs/consolidated_telemetry
+[rosbridge_websocket-1] [INFO] [1786729005.078510879] [rosbridge_websocket]: [Client 532ec4f3-65da-466b-9505-3233a4f0a04c] Unsubscribed from /gcs/consolidated_telemetry
+[rosbridge_websocket-1] [INFO] [1786729005.078763046] [rosbridge_websocket]: Sending action goals in existing thread
+[rosbridge_websocket-1] [INFO] [1786729005.079599703] [rosbridge_websocket]: Client connected. 2 clients total.
+[rosbridge_websocket-1] [INFO] [1786729005.081042658] [rosbridge_websocket]: [Client f44299fd-1e32-43dd-aa2c-0258c4694db2] Subscribed to /gcs/consolidated_telemetry
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[rosbridge_websocket-1] registered capabilities (classes):
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.advertise.Advertise'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.publish.Publish'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.subscribe.Subscribe'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.defragmentation.Defragment'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.advertise_service.AdvertiseService'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.call_service.CallService'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.service_response.ServiceResponse'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.unadvertise_service.UnadvertiseService'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.advertise_action.AdvertiseAction'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.action_feedback.ActionFeedback'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.action_result.ActionResult'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.send_action_goal.SendActionGoal'>
+[rosbridge_websocket-1]  - <class 'rosbridge_library.capabilities.unadvertise_action.UnadvertiseAction'>
+[rosbridge_websocket-1] Exiting due to SIGINT
+[INFO] [rosapi_node-2]: process has finished cleanly [pid 604445]
+[INFO] [rosbridge_websocket-1]: process has finished cleanly [pid 604443]

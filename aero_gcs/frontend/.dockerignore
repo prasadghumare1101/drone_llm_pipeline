@@ -1,0 +1,7 @@
+# Never copy these into the build context (Node reinstalls them in-image).
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+Dockerfile
+.dockerignore

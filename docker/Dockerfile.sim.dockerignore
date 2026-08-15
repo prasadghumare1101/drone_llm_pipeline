@@ -1,0 +1,28 @@
+# Dedicated ignore for the FULL SIM image (docker/Dockerfile.sim).
+# BuildKit uses <dockerfile-path>.dockerignore before the root .dockerignore,
+# so this lets the sim build include aero_gcs (excluded by the root ignore)
+# while still dropping the truly heavy/regenerated stuff.
+
+# regenerated inside the image
+build/
+install/
+log/
+runs/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# px4_msgs + PX4 are cloned fresh in the image (pinned versions) — don't ship host copies
+src/
+aero_gcs/frontend/node_modules/
+aero_gcs/frontend/dist/
+
+# unrelated workspaces
+ws_swarm/
+ws_offboard_control/
+
+# vcs / editor / docs
+.git/
+.vscode/
+.claude/
+*.md
