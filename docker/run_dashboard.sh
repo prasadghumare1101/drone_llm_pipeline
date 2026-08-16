@@ -12,6 +12,18 @@ set -euo pipefail
 # Pull from GHCR by default; override with IMAGE=... for a local build.
 IMAGE="${IMAGE:-ghcr.io/prasadghumare1101/drone-llm-sim:latest}"
 
+# --- permanent HF token (safe: stays on the host, never inside the image) -----
+# Set your token ONCE:   mkdir -p ~/.config/drone_llm
+#                        echo 'HF_TOKEN=hf_xxxxx' > ~/.config/drone_llm/hf.env
+# From then on every run picks it up automatically (no export needed).
+TOKEN_FILE="${DRONE_LLM_TOKEN_FILE:-$HOME/.config/drone_llm/hf.env}"
+if [ -z "${HF_TOKEN:-}" ] && [ -f "$TOKEN_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -a; . "$TOKEN_FILE"; set +a
+  echo "info: loaded HF_TOKEN from $TOKEN_FILE"
+fi
+[ -n "${HF_TOKEN:-}" ] || echo "warn: no HF_TOKEN -> the LLM falls back to the offline parser."
+
 xhost +local:root >/dev/null 2>&1 || \
   echo "warn: 'xhost' failed — the Gazebo GUI needs an X server on the host."
 
