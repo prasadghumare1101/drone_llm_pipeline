@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bgMain text-textMain overflow-hidden font-sans;
+  }
+}
+
+/* Custom scrollbar for telemetry logs to maintain aesthetics */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+/* Vertical zoom sliders used by the FPV + Mission Map panels */
+input[type="range"].aero-vslider {
+  -webkit-appearance: none;
+  appearance: none;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].aero-vslider::-webkit-slider-runnable-track {
+  width: 6px;
+  border-radius: 999px;
+  background: #E5E7EB;
+}
+input[type="range"].aero-vslider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -5px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+input[type="range"].aero-vslider::-moz-range-track {
+  width: 6px;
+  border-radius: 999px;
+  background: #E5E7EB;
+}
+input[type="range"].aero-vslider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}

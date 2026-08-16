@@ -15,7 +15,9 @@ log/
 # ---- Vendored upstream ROS packages (cloned separately; see README) ----
 # px4_msgs / px4_ros_com / px4_offboard are upstream repos, not part of this
 # project. The Docker sim image clones px4_msgs fresh at the pinned version.
-src/
+# Leading slash = ONLY the repo-root src/ (NOT aero_gcs/frontend/src, which is
+# the dashboard's own source and MUST be committed).
+/src/
 
 # ---- Node / frontend build ----
 node_modules/
