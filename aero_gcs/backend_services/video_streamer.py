@@ -35,11 +35,17 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
+# AERO_CAMERA_TOPIC is only a PREFERENCE now. If it isn't present on the graph,
+# the streamer auto-discovers a camera topic (so it works no matter what the
+# Gazebo model actually names it). Set it to force a specific topic.
 BASE_TOPIC = os.environ.get("AERO_CAMERA_TOPIC", "/front_camera/image_raw")
 TARGET_FPS = float(os.environ.get("AERO_FPS", 15))
 JPEG_QUALITY = int(os.environ.get("AERO_JPEG_QUALITY", 50))
 STALE_AFTER_S = 2.0
 WIDTH, HEIGHT = 640, 360
+
+# Never pick these as the FPV feed (depth maps, point clouds, metadata, …).
+_EXCLUDE = ("depth", "points", "camera_info", "theora", "disparity", "/info")
 
 
 class LatestFrame:
@@ -64,6 +70,7 @@ class LatestFrame:
 
 
 FRAME = LatestFrame()
+NODE = None          # set once the ROS node is created (for /health reporting)
 
 
 def _placeholder(msg: str = "WAITING FOR CAMERA") -> bytes:
@@ -77,34 +84,96 @@ def _placeholder(msg: str = "WAITING FOR CAMERA") -> bytes:
     return buf.tobytes() if ok else b""
 
 
+def _rank_topic(name: str) -> int:
+    """Higher = more likely to be the FPV camera. Negative = never use."""
+    n = name.lower()
+    if any(x in n for x in _EXCLUDE):
+        return -1
+    score = 0
+    if name == BASE_TOPIC or name == f"{BASE_TOPIC}/compressed":
+        score += 100                      # honour the configured preference
+    if "front" in n:
+        score += 50
+    if "camera" in n or "image" in n:
+        score += 10
+    if "downward" in n:
+        score -= 20                       # prefer the forward camera
+    return score
+
+
 class CameraNode(Node):
-    """Subscribes to the compressed topic (preferred) and the raw topic."""
+    """Discovers a camera topic from the live ROS graph and streams it.
+
+    The exact topic a Gazebo model publishes varies (namespaces, remappings),
+    and it only appears AFTER the sim starts — so we keep scanning until we find
+    one, subscribe to the best-ranked image topic (+ its /compressed sibling),
+    and forward frames. No hardcoded topic name required.
+    """
 
     def __init__(self) -> None:
         super().__init__("gcs_video_streamer")
         # Gazebo image_transport publishers are best-effort; a RELIABLE reader
         # would silently never match them.
-        qos = QoSProfile(
+        self._qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self.create_subscription(
-            CompressedImage, f"{BASE_TOPIC}/compressed", self._on_compressed, qos)
-        self.create_subscription(Image, BASE_TOPIC, self._on_raw, qos)
+        self._subs: dict = {}             # topic -> subscription
         self._got_compressed = False
-        self.get_logger().info(f"video source: {BASE_TOPIC}[/compressed]")
+        self.active_topic: str | None = None
+        self._discover()                  # try immediately
+        self.create_timer(3.0, self._discover)   # then keep re-scanning
 
-    def _on_compressed(self, msg: CompressedImage) -> None:
-        # format is e.g. "rgb8; jpeg compressed bgr8" -> already JPEG, forward as-is
-        if "jpeg" in msg.format.lower():
+    # ---- topic discovery ------------------------------------------------- #
+    def _discover(self) -> None:
+        # Once a source is delivering fresh frames, stop hunting.
+        if self.active_topic and FRAME.get() is not None:
+            return
+        raw_type = "sensor_msgs/msg/Image"
+        cmp_type = "sensor_msgs/msg/CompressedImage"
+        best_raw, best_raw_score = None, 0
+        try:
+            topics = self.get_topic_names_and_types()
+        except Exception:
+            return
+        for name, types in topics:
+            score = _rank_topic(name)
+            if score <= 0:
+                continue
+            if raw_type in types and score > best_raw_score:
+                best_raw, best_raw_score = name, score
+            # a compressed topic already carries JPEG -> subscribe directly
+            if cmp_type in types and name not in self._subs:
+                self._sub_compressed(name)
+        if best_raw and best_raw not in self._subs:
+            self._sub_raw(best_raw)
+            # its image_transport sibling, if any
+            comp = f"{best_raw}/compressed"
+            if comp not in self._subs:
+                self._sub_compressed(comp)
+
+    def _sub_raw(self, topic: str) -> None:
+        self._subs[topic] = self.create_subscription(
+            Image, topic, lambda m, t=topic: self._on_raw(t, m), self._qos)
+        self.get_logger().info(f"video: subscribed raw {topic}")
+
+    def _sub_compressed(self, topic: str) -> None:
+        self._subs[topic] = self.create_subscription(
+            CompressedImage, topic, lambda m, t=topic: self._on_compressed(t, m),
+            self._qos)
+        self.get_logger().info(f"video: subscribed compressed {topic}")
+
+    # ---- frame callbacks ------------------------------------------------- #
+    def _on_compressed(self, topic: str, msg: CompressedImage) -> None:
+        if "jpeg" in msg.format.lower() or "jpg" in msg.format.lower():
             self._got_compressed = True
+            self.active_topic = topic
             FRAME.set(bytes(msg.data))
 
-    def _on_raw(self, msg: Image) -> None:
-        # only used when the compressed topic is absent
-        if self._got_compressed:
+    def _on_raw(self, topic: str, msg: Image) -> None:
+        if self._got_compressed:          # prefer the zero-transcode path
             return
         try:
             arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(
@@ -114,6 +183,7 @@ class CameraNode(Node):
             ok, buf = cv2.imencode(
                 ".jpg", arr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
             if ok:
+                self.active_topic = topic
                 FRAME.set(buf.tobytes())
         except (ValueError, cv2.error):
             pass
@@ -153,12 +223,17 @@ def snapshot() -> Response:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "topic": BASE_TOPIC, "receiving": FRAME.get() is not None}
+    active = getattr(NODE, "active_topic", None)
+    subs = list(getattr(NODE, "_subs", {}).keys())
+    return {"ok": True, "preferred": BASE_TOPIC, "active_topic": active,
+            "subscribed": subs, "receiving": FRAME.get() is not None}
 
 
 def _spin_ros() -> None:
+    global NODE
     rclpy.init()
     node = CameraNode()
+    NODE = node
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, RuntimeError):
