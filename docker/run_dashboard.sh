@@ -32,17 +32,16 @@ xhost +local:root >/dev/null 2>&1 || \
 #   * a registered "nvidia" runtime  -> --runtime=nvidia   (works in CDI mode too,
 #     where --gpus all is REJECTED with "please use --runtime=nvidia")
 #   * otherwise, the classic         -> --gpus all
+# GL_ENV forces the NVIDIA driver for RENDERING — without it the container falls
+# back to Mesa/llvmpipe (software), the usual cause of a slow/laggy Gazebo window.
+# __NV_PRIME_RENDER_OFFLOAD helps hybrid (Optimus) laptops whose X runs on Intel.
 GPU_ARGS=()
-if [ "${AERO_NO_GPU:-0}" = "1" ]; then
-  echo "info: GPU disabled (AERO_NO_GPU=1) -> software rendering."
-# GL env that forces the NVIDIA driver for rendering. Without these the container
-# falls back to Mesa/llvmpipe (software) even with the GPU passed in — that is the
-# usual cause of a slow/laggy Gazebo window. __NV_PRIME_RENDER_OFFLOAD helps on
-# hybrid (Optimus) laptops where the X server runs on the Intel iGPU.
 GL_ENV=(--env __GLX_VENDOR_LIBRARY_NAME=nvidia
         --env __NV_PRIME_RENDER_OFFLOAD=1
         --env NVIDIA_DRIVER_CAPABILITIES=all)
-if docker info 2>/dev/null | grep -A3 -i "runtimes:" | grep -qi nvidia; then
+if [ "${AERO_NO_GPU:-0}" = "1" ]; then
+  echo "info: GPU disabled (AERO_NO_GPU=1) -> software rendering."
+elif docker info 2>/dev/null | grep -A3 -i "runtimes:" | grep -qi nvidia; then
   GPU_ARGS=(--runtime=nvidia --env NVIDIA_VISIBLE_DEVICES=all "${GL_ENV[@]}")
   echo "info: NVIDIA GPU on via --runtime=nvidia (set AERO_NO_GPU=1 to disable)."
 elif docker info 2>/dev/null | grep -qi nvidia; then
