@@ -27,12 +27,24 @@ fi
 xhost +local:root >/dev/null 2>&1 || \
   echo "warn: 'xhost' failed — the Gazebo GUI needs an X server on the host."
 
+# GPU passthrough. Disable entirely with AERO_NO_GPU=1 (software rendering).
+# Different NVIDIA setups need different flags:
+#   * a registered "nvidia" runtime  -> --runtime=nvidia   (works in CDI mode too,
+#     where --gpus all is REJECTED with "please use --runtime=nvidia")
+#   * otherwise, the classic         -> --gpus all
 GPU_ARGS=()
-if docker info 2>/dev/null | grep -qi nvidia; then
+if [ "${AERO_NO_GPU:-0}" = "1" ]; then
+  echo "info: GPU disabled (AERO_NO_GPU=1) -> software rendering."
+elif docker info 2>/dev/null | grep -A3 -i "runtimes:" | grep -qi nvidia; then
+  GPU_ARGS=(--runtime=nvidia
+            --env NVIDIA_VISIBLE_DEVICES=all
+            --env NVIDIA_DRIVER_CAPABILITIES=all)
+  echo "info: NVIDIA GPU on via --runtime=nvidia (set AERO_NO_GPU=1 to disable)."
+elif docker info 2>/dev/null | grep -qi nvidia; then
   GPU_ARGS=(--gpus all --env NVIDIA_DRIVER_CAPABILITIES=all)
-  echo "info: NVIDIA GPU passthrough on."
+  echo "info: NVIDIA GPU on via --gpus all."
 else
-  echo "info: no NVIDIA runtime -> Gazebo uses software rendering (slower, still works)."
+  echo "info: no NVIDIA runtime -> software rendering (slower, still works)."
 fi
 
 echo "info: pulling / starting $IMAGE …"
