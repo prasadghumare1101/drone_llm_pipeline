@@ -116,7 +116,15 @@ COPY validator/      /opt/drone_llm_pipeline/validator/
 COPY executor/       /opt/drone_llm_pipeline/executor/
 COPY sim_bridge/     /opt/drone_llm_pipeline/sim_bridge/
 COPY aero_gcs/backend_services/ /opt/drone_llm_pipeline/aero_gcs/backend_services/
-RUN pip3 install --no-cache-dir "jsonschema>=4.17" fastapi "uvicorn[standard]"
+# pip deps for the pipeline + dashboard backend.
+# CRITICAL: pin numpy<2 and (re)install a matching OpenCV. The apt python3-opencv
+# on Ubuntu 22.04 was built against numpy 1.x; the numpy that pip pulled during
+# the PX4 build is 2.x, which breaks `import cv2` with an ABI error — that crash
+# is what stops video_streamer.py from ever binding :8080 (blank FPV). Pinning
+# numpy<2 + opencv-python-headless makes the cv2 import (and the streamer) work.
+RUN pip3 install --no-cache-dir \
+      "jsonschema>=4.17" fastapi "uvicorn[standard]" \
+      "numpy<2" opencv-python-headless
 
 # The built dashboard UI (from stage 0) — served as static files at run time.
 COPY --from=ui /ui/dist /opt/frontend_dist
