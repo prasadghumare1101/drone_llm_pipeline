@@ -55,6 +55,8 @@ echo "info: pulling / starting $IMAGE …"
 exec docker run --rm -it \
   --name drone_dashboard \
   --network host \
+  --ipc=host \
+  --shm-size=1g \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env XAUTHORITY=/root/.Xauthority \
@@ -63,4 +65,10 @@ exec docker run --rm -it \
   --volume "${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:rw" \
   "${GPU_ARGS[@]}" \
   "$IMAGE"
+# --ipc=host + --shm-size=1g: ROS 2 Humble's default Fast-DDS uses SHARED MEMORY
+# transport. Docker's default /dev/shm is only 64 MB, which small messages
+# (telemetry) survive but LARGE camera image frames do not -> the FPV topic is
+# published but never delivered to the streamer. Sharing the host IPC namespace +
+# a 1 GB shm gives DDS the room it needs. This is the usual "camera never comes"
+# cause in a container.
 # (no command => the image's default CMD ["dashboard"] auto-starts everything)
