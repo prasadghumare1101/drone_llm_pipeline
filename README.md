@@ -108,12 +108,7 @@ cd drone_llm_pipeline
 # build the all-in-one image
 DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.sim -t drone-llm-sim .
 
-# (optional) set the LLM token once; without it the deterministic offline parser is used
-mkdir -p ~/.config/drone_llm
-echo 'HF_TOKEN=<your_hf_token>' > ~/.config/drone_llm/hf.env
-
 # run — opens the dashboard + Gazebo GUI
-xhost +local:root
 IMAGE=drone-llm-sim ./docker/run_dashboard.sh
 ```
 
