@@ -1,6 +1,6 @@
 <div align="center">
 
-# AI Aeromast Operator
+# AI AeroMast Operator
 
 **Natural-language → validated mission → deterministic execution on a simulated PX4 drone.**
 
