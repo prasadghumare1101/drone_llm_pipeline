@@ -84,6 +84,5 @@ def command_to_dict(cmd: ExecutableCommand) -> dict:
 def commands_digest(cmds: Sequence[ExecutableCommand]) -> str:
     """Canonical SHA-256 over a command sequence. Used to prove determinism:
     same validated JSON in -> same digest out, every time."""
-    canon = json.dumps([command_to_dict(c) for c in cmds],
-                       sort_keys=True, separators=(",", ":")).encode("utf-8")
+    canon = json.dumps([command_to_dict(c) for c in cmds],sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canon).hexdigest()

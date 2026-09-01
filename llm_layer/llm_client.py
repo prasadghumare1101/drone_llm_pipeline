@@ -51,7 +51,6 @@ DEFAULT_HF_MODEL = "Qwen/Qwen2.5-72B-Instruct"
 HF_FALLBACK_MODELS = (
     "openai/gpt-oss-20b",
     "meta-llama/Llama-3.1-8B-Instruct",
-    "moonshotai/Kimi-K2-Instruct-0905",
 )
 # Retried in order when a model returns empty content with finish_reason=length.
 # A survey grid is ~40 waypoints of JSON, so the ceiling has to be generous.
