@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as ROSLIB from 'roslib';
+import { ROSBRIDGE_URL } from '../config';
 
 /**
  * Live vehicle state. Mirrors the JSON published by
@@ -37,7 +38,6 @@ export const DEFAULT_TELEMETRY: Telemetry = {
   x: 0, y: 0,
 };
 
-const ROSBRIDGE_URL = 'ws://localhost:9090';
 
 export const useROS = () => {
   const [connected, setConnected] = useState(false);

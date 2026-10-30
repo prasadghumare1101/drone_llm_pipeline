@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { MoreHorizontal, Camera, Plus, Minus } from 'lucide-react';
 import HudStrip from './HudStrip';
 import type { Telemetry } from '../hooks/useROS';
+import { VIDEO_URL } from '../config';
 
-const VIDEO_URL = 'http://localhost:8080/video_feed';
 
 /**
  * Live FPV panel. The MJPEG stream is bound straight to an <img> src so frames

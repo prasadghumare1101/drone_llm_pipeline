@@ -1,1 +1,4 @@
-[INFO] [1786729006.659609226] [gcs_video_streamer]: video source: /front_camera/image_raw[/compressed]
+[INFO] [1793300775.283626591] [gcs_video_streamer]: video: subscribed compressed /front_camera/image_raw/compressed
+[INFO] [1793300775.285065258] [gcs_video_streamer]: video: subscribed raw /front_camera/image_raw
+[INFO] Video streamer on :8080  (source /front_camera/image_raw)
+terminate called without an active exception

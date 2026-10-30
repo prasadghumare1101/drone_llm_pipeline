@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { API_BASE } from '../config';
 
-export const API_BASE = 'http://localhost:8000';
+
+export { API_BASE };
 
 /** One row of the MISSION AUTOMATION & CONTROL table / one pin on the map. */
 export interface MissionWaypoint {
