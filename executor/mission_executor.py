@@ -129,6 +129,23 @@ def expand_spiral(c: "SpiralCmd", speed: float) -> List[ExecutableCommand]:
 
 def compile_mission(plan: MissionPlan) -> Tuple[ExecutableCommand, ...]:
     """Compile a validated MissionPlan into a flat executable command sequence."""
+    return _compile(plan, arm=True)
+
+
+def compile_step(plan: MissionPlan) -> Tuple[ExecutableCommand, ...]:
+    """Compile one validated interactive step (from validator.validate_step).
+
+    Identical to compile_mission() except that it NEVER emits Arm: in
+    interactive mode arming is the pilot's job, and a step starts from wherever
+    the vehicle already is.
+    """
+    if isinstance(plan, MissionPlan) and plan.start_pose is None:
+        raise TypeError("compile_step() needs a plan from validator.validate_step() "
+                        "(it carries the pose relative moves were resolved from)")
+    return _compile(plan, arm=False)
+
+
+def _compile(plan: MissionPlan, arm: bool) -> Tuple[ExecutableCommand, ...]:
     if not isinstance(plan, MissionPlan):
         raise TypeError(
             "compile_mission() accepts only a validated validator.MissionPlan "
@@ -139,7 +156,7 @@ def compile_mission(plan: MissionPlan) -> Tuple[ExecutableCommand, ...]:
     cruise = plan.cruise_speed_mps
     seq: List[ExecutableCommand] = []
 
-    if plan.vehicle == "drone":
+    if arm and plan.vehicle == "drone":
         seq.append(Arm())
 
     for cmd in plan.commands:

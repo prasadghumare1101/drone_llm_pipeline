@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "mission_schema.json",
   "title": "MissionPlan",
-  "description": "Validated mission plan contract. Conventions (documented defaults): frame is a local tangent plane centred on the home/arming point, LOCAL_ENU_METERS (x = East, y = North, alt = metres above home, positive up). Units: metres, metres/second, seconds. Command whitelist: TAKEOFF, GOTO, LOOP, HOLD, LAND, RTL. Numeric safety limits (max altitude/speed/geofence/loop counts) are enforced by validator/safety_limits.py, not duplicated here; this schema enforces structure, types and the command whitelist.",
+  "description": "Validated mission plan contract. Conventions (documented defaults): frame is a local tangent plane centred on the home/arming point, LOCAL_ENU_METERS (x = East, y = North, alt = metres above home, positive up). Units: metres, metres/second, seconds. Command whitelist: TAKEOFF, GOTO, LOOP, HOLD, LAND, RTL, GRID, ORBIT, SPIRAL, CAPTURE, RECORD, GIMBAL, MOVE. MOVE is relative to the live vehicle pose and is only accepted in interactive steps (validator.validate_step). Numeric safety limits (max altitude/speed/geofence/loop counts) are enforced by validator/safety_limits.py, not duplicated here; this schema enforces structure, types and the command whitelist.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "mission_name", "vehicle", "frame", "cruise_speed_mps", "commands"],
@@ -49,7 +49,8 @@
         { "$ref": "#/definitions/cmd_spiral" },
         { "$ref": "#/definitions/cmd_capture" },
         { "$ref": "#/definitions/cmd_record" },
-        { "$ref": "#/definitions/cmd_gimbal" }
+        { "$ref": "#/definitions/cmd_gimbal" },
+        { "$ref": "#/definitions/cmd_move" }
       ]
     },
     "cmd_grid": {
@@ -131,6 +132,21 @@
         "type":      { "const": "GIMBAL" },
         "pitch_deg": { "type": "number", "minimum": -90, "maximum": 90 },
         "yaw_deg":   { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "cmd_move": {
+      "description": "Relative move from the current position (interactive steps only). Body axes (forward/right) follow the drone's heading; world axes (north/east) do not. Do not mix the two in one MOVE. up is positive-up in both.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type":      { "const": "MOVE" },
+        "forward":   { "type": "number" },
+        "right":     { "type": "number" },
+        "north":     { "type": "number" },
+        "east":      { "type": "number" },
+        "up":        { "type": "number" },
+        "speed_mps": { "type": "number", "exclusiveMinimum": 0 }
       }
     },
     "cmd_takeoff": {

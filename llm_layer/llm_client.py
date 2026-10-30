@@ -19,7 +19,13 @@ Backends:
     and zero keys, and doubles as an honest demonstration that the validator —
     not the language model — is the safety boundary.
 
-"auto" uses Hugging Face when HF_TOKEN is set, else the offline parser.
+  * GroqBackend - Groq's OpenAI-compatible API (free tier serves the
+    gpt-oss models). Key: https://console.groq.com/keys exported as
+    GROQ_API_KEY. Model defaults to "openai/gpt-oss-120b" with
+    "openai/gpt-oss-20b" as fallback (override with GROQ_MODEL).
+
+"auto" uses Groq when GROQ_API_KEY is set, else Hugging Face when HF_TOKEN is
+set, else the offline parser.
 """
 from __future__ import annotations
 
@@ -32,10 +38,12 @@ import urllib.error
 import urllib.request
 from typing import List, Optional
 
-from .prompts import SYSTEM_PROMPT, build_user_prompt
+from .prompts import (STEP_SYSTEM_PROMPT, SYSTEM_PROMPT, build_step_user_prompt,
+                      build_user_prompt)
 
 HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions"
 HF_MODELS_URL = "https://router.huggingface.co/v1/models"
+HF_TOKEN_ENVS = ("HF_TOKEN", "HUGGINGFACE_API_KEY", "HF_API_TOKEN")
 # Measured on this task (NL -> schema-constrained mission JSON, ~1.4k-token
 # system prompt), 2026-07: gpt-oss-20b returned a valid plan 4/4 in ~3.9 s.
 # gpt-oss-120b, Llama-3.3-70B and Qwen2.5-7B all answer trivial prompts but are
@@ -55,6 +63,12 @@ HF_FALLBACK_MODELS = (
 # Retried in order when a model returns empty content with finish_reason=length.
 # A survey grid is ~40 waypoints of JSON, so the ceiling has to be generous.
 TOKEN_BUDGETS = (6000, 16000)
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+GROQ_FALLBACK_MODELS = ("openai/gpt-oss-20b",)
+# Groq sits behind Cloudflare, which rejects urllib's default User-Agent.
+USER_AGENT = "drone-llm-pipeline/1.0"
 # Attempts per model when a provider blocks us (HF rotates providers per call,
 # so a plain retry usually routes around a Cloudflare-blocked one).
 PROVIDER_ATTEMPTS = 3
@@ -172,32 +186,46 @@ class HuggingFaceBackend:
     if all are unavailable, the raised error lists models this token can call
     so the fix is always `export HF_MODEL=<one of them>`."""
     name = "huggingface"
+    label = "HF router"
+    chat_url = HF_CHAT_URL
+    models_url = HF_MODELS_URL
+    token_envs: tuple = HF_TOKEN_ENVS
+    model_env = "HF_MODEL"
+    default_model = DEFAULT_HF_MODEL
+    fallback_models: tuple = HF_FALLBACK_MODELS
+    missing_token = ("HF_TOKEN not set (create a fine-grained token with the "
+                     "'Make calls to Inference Providers' permission at "
+                     "https://hf.co/settings/tokens)")
 
     def __init__(self, api_token: Optional[str] = None,
                  model: Optional[str] = None, timeout_s: float = 120.0):
-        self.api_token = (api_token
-                          or os.environ.get("HF_TOKEN", "")
-                          or os.environ.get("HUGGINGFACE_API_KEY", "")
-                          or os.environ.get("HF_API_TOKEN", ""))
+        self.api_token = api_token or next(
+            (os.environ[v] for v in self.token_envs if os.environ.get(v)), "")
         if not self.api_token:
-            raise LLMError(
-                "HF_TOKEN not set (create a fine-grained token with the "
-                "'Make calls to Inference Providers' permission at "
-                "https://hf.co/settings/tokens)")
-        env_model = os.environ.get("HF_MODEL")
-        self.model = model or env_model or DEFAULT_HF_MODEL
+            raise LLMError(self.missing_token)
+        env_model = os.environ.get(self.model_env)
+        self.model = model or env_model or self.default_model
         self.model_pinned = bool(model or env_model)
         self.timeout_s = timeout_s
         self._token_live: Optional[bool] = None   # cached by _token_is_live()
+        self._system_prompt = SYSTEM_PROMPT
 
     # ------------------------------------------------------------------ #
 
     def propose(self, natural_language_request: str) -> str:
-        user_prompt = build_user_prompt(natural_language_request)
+        self._system_prompt = SYSTEM_PROMPT
+        return self._complete(build_user_prompt(natural_language_request))
+
+    def propose_step(self, request: str, state: dict, history: list) -> str:
+        """One interactive step (see prompts.STEP_SYSTEM_PROMPT)."""
+        self._system_prompt = STEP_SYSTEM_PROMPT
+        return tidy_mission_name(self._complete(build_step_user_prompt(request, state, history)))
+
+    def _complete(self, user_prompt: str) -> str:
         if self.model_pinned:
             chain: List[str] = [self.model]
         else:
-            chain = [self.model] + [m for m in HF_FALLBACK_MODELS
+            chain = [self.model] + [m for m in self.fallback_models
                                     if m != self.model]
         last: Optional[Exception] = None
         for m in chain:
@@ -211,7 +239,7 @@ class HuggingFaceBackend:
                     try:
                         payload = self._chat(m, user_prompt, budget)
                         if m != chain[0]:
-                            print(f"[llm_layer] HF model '{chain[0]}' unavailable "
+                            print(f"[llm_layer] {self.label} model '{chain[0]}' unavailable "
                                   f"-> using fallback '{m}'", file=sys.stderr)
                         return _extract_json_object(_extract_chat_text(payload))
                     except _ProviderUnavailable as e:
@@ -234,10 +262,10 @@ class HuggingFaceBackend:
                     break            # budget will not fix a missing model
         available = self._list_models()
         raise LLMError(
-            f"No HF model from {chain} produced a usable mission "
+            f"No {self.label} model from {chain} produced a usable mission "
             f"(last error: {last}). Models this token can call: "
             f"{available if available else '(model list lookup failed)'} "
-            f"-> set HF_MODEL to one of them.") from last
+            f"-> set {self.model_env} to one of them.") from last
 
     @staticmethod
     def _model_understands_reasoning_effort(model: str) -> bool:
@@ -261,7 +289,7 @@ class HuggingFaceBackend:
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0,
@@ -272,10 +300,11 @@ class HuggingFaceBackend:
             payload["reasoning_effort"] = REASONING_EFFORT
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            HF_CHAT_URL,
+            self.chat_url,
             data=body,
             headers={
                 "content-type": "application/json",
+                "user-agent": USER_AGENT,
                 "authorization": f"Bearer {self.api_token}",
             },
             method="POST",
@@ -322,9 +351,9 @@ class HuggingFaceBackend:
                      "monthly quota used up; top up or wait for reset)",
             }
             raise LLMError(
-                f"HF router HTTP {e.code}{hints.get(e.code, '')}: {detail}") from e
+                f"{self.label} HTTP {e.code}{hints.get(e.code, '') if self.name == 'huggingface' else ''}: {detail}") from e
         except urllib.error.URLError as e:
-            raise LLMError(f"HF router unreachable: {e.reason}") from e
+            raise LLMError(f"{self.label} unreachable: {e.reason}") from e
 
     def _token_is_live(self) -> bool:
         """Does the token still authenticate against the HF router itself?
@@ -334,8 +363,9 @@ class HuggingFaceBackend:
         """
         if self._token_live is None:
             req = urllib.request.Request(
-                HF_MODELS_URL,
-                headers={"authorization": f"Bearer {self.api_token}"})
+                self.models_url,
+                headers={"authorization": f"Bearer {self.api_token}",
+                         "user-agent": USER_AGENT})
             try:
                 with urllib.request.urlopen(req, timeout=20) as resp:
                     self._token_live = resp.status == 200
@@ -348,8 +378,9 @@ class HuggingFaceBackend:
     def _list_models(self) -> list:
         """Best-effort GET /v1/models for actionable error messages."""
         req = urllib.request.Request(
-            HF_MODELS_URL,
-            headers={"authorization": f"Bearer {self.api_token}"})
+            self.models_url,
+            headers={"authorization": f"Bearer {self.api_token}",
+                     "user-agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -357,6 +388,21 @@ class HuggingFaceBackend:
             return sorted(n for n in names if n)[:25]
         except Exception:
             return []
+
+
+class GroqBackend(HuggingFaceBackend):
+    """Groq (OpenAI-compatible). Same request/retry/fallback logic as the HF
+    router backend - only the endpoint, key and model defaults differ."""
+    name = "groq"
+    label = "Groq"
+    chat_url = GROQ_CHAT_URL
+    models_url = GROQ_MODELS_URL
+    token_envs = ("GROQ_API_KEY",)
+    model_env = "GROQ_MODEL"
+    default_model = DEFAULT_GROQ_MODEL
+    fallback_models = GROQ_FALLBACK_MODELS
+    missing_token = ("GROQ_API_KEY not set (create a free key at "
+                     "https://console.groq.com/keys)")
 
 
 # --------------------------------------------------------------------------- #
@@ -436,29 +482,206 @@ class OfflineHeuristicBackend:
         return json.dumps(mission, indent=2, sort_keys=True)
 
 
+_DIRECTIONS = {
+    # word -> (axis, sign); body axes follow the heading, world axes do not
+    "left": ("right", -1), "right": ("right", 1),
+    "forward": ("forward", 1), "forwards": ("forward", 1), "ahead": ("forward", 1),
+    "back": ("forward", -1), "backward": ("forward", -1), "backwards": ("forward", -1),
+    "north": ("north", 1), "south": ("north", -1),
+    "east": ("east", 1), "west": ("east", -1),
+    "up": ("up", 1), "down": ("up", -1),
+}
+_NUM = r"(\d+(?:\.\d+)?)"
+_M = r"\s*(?:m\b|meters?\b|metres?\b)"
+_KM = re.compile(r"(\d+(?:\.\d+)?)\s*(?:km\b|kms\b|kilomet(?:er|re)s?\b)")
+
+
+def km_to_m(text: str) -> str:
+    """'1.5 km' -> '1500 m', so every distance parser only has to know metres."""
+    return _KM.sub(lambda m: f"{float(m.group(1)) * 1000:g} m", text)
+
+
+_NAME_OK = re.compile(r"[^A-Za-z0-9 _-]+")
+
+
+def tidy_mission_name(raw: str) -> str:
+    """mission_name is only a label, but the schema restricts its characters;
+    models write things like "patrol 1.5km square". Fix the label rather than
+    reject a sound plan over punctuation. Nothing that flies is touched, and
+    anything that is not a JSON object is returned unchanged for the validator."""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return raw
+    if isinstance(data, dict) and isinstance(data.get("mission_name"), str):
+        name = _NAME_OK.sub(" ", data["mission_name"]).strip()[:80] or "step"
+        if name != data["mission_name"]:
+            data["mission_name"] = name
+            return json.dumps(data)
+    return raw
+
+
+class OfflineStepParser:
+    """Deterministic parser for interactive steps (no network, no keys).
+
+    Understands the common one-line commands: relative moves, climb/descend,
+    go to x,y, survey AxB, orbit, hover N s, photo, take off. Anything else
+    raises LLMError so the operator is told plainly rather than guessed at.
+    """
+
+    def propose_step(self, request: str, state: dict, history: list) -> str:
+        text = km_to_m(request.lower().replace("×", "x"))
+        pos = state["position"]
+        x, y, alt = pos["x"], pos["y"], pos["alt"]
+        airborne = state["in_air"]
+        cmds: list = []
+        notes: list = []
+
+        m = re.search(r"\b(?:take ?off|launch|lift ?off)\b(?:[^\d]*" + _NUM + _M + ")?", text)
+        to_alt = float(m.group(1)) if m and m.group(1) else None
+        if not airborne:
+            to_alt = to_alt or 10.0
+            cmds.append({"type": "TAKEOFF", "alt": to_alt})
+            notes.append(f"take off to {to_alt:g} m")
+            alt = to_alt
+
+        at = re.search(r"\bat\s+" + _NUM + _M, text)
+        work_alt = float(at.group(1)) if at else alt
+
+        survey = re.search(r"\b(?:survey|map|scan|cover)\b.*?" + _NUM + r"\s*(?:m\s*)?(?:x|by)\s*"
+                           + _NUM + r"(?:" + _M + r")?", text)
+        orbit = re.search(r"\b(?:orbit|circle)\b", text)
+        goto = re.search(r"\b(?:go|fly|move|head)\s+to\s*\(?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)?", text)
+        climb_to = re.search(r"\b(?:climb|ascend|descend|go up|go down|altitude)\s*(?:to)\s*" + _NUM + _M, text)
+        climb_by = re.search(r"\b(climb|ascend|rise|descend|drop|lower)\s*(?:by\s*)?" + _NUM + _M, text)
+        hover = re.search(r"\b(?:hover|hold|wait|stay)\b.*?" + _NUM + r"\s*(?:s\b|sec|seconds?)", text)
+        moves = re.findall(_NUM + _M + r"\s*(?:to the\s+)?(left|right|forwards?|ahead|backwards?|back|north|south|east|west|up|down)\b", text)
+        moves += [(n, d) for d, n in re.findall(r"\b(left|right|forwards?|ahead|backwards?|back|north|south|east|west|up|down)\s*(?:by\s*)?" + _NUM + _M, text)]
+
+        if survey:
+            w, h = float(survey.group(1)), float(survey.group(2))
+            sp = re.search(_NUM + _M + r"\s*(?:lanes?|spacing|apart)", text)
+            spacing = float(sp.group(1)) if sp else max(2.0, min(10.0, min(w, h) / 4.0))
+            grid = {"type": "GRID", "center_x": x, "center_y": y, "width": w, "height": h,
+                    "spacing": spacing, "alt": work_alt}
+            if re.search(r"\b(photo|photograph|picture|capture|image)", text):
+                grid["capture"] = True
+            cmds.append(grid)
+            notes.append(f"survey {w:g} x {h:g} m centred here at {work_alt:g} m")
+        elif orbit:
+            r = re.search(r"(?:radius\s*(?:of\s*)?" + _NUM + _M + "|" + _NUM + _M + r"\s*radius)", text)
+            radius = float(next(g for g in r.groups() if g)) if r else 15.0
+            t = re.search(r"(\d+)\s*(?:times|turns|laps)|\b(once|twice|thrice)\b", text)
+            turns = int(t.group(1)) if t and t.group(1) else {"twice": 2, "thrice": 3}.get(t.group(2), 1) if t else 1
+            cmds.append({"type": "ORBIT", "x": x, "y": y, "alt": work_alt, "radius": radius,
+                         "turns": turns, "points_per_turn": 12})
+            notes.append(f"orbit {radius:g} m around here x{turns}")
+        elif goto:
+            gx, gy = float(goto.group(1)), float(goto.group(2))
+            cmds.append({"type": "GOTO", "x": gx, "y": gy, "alt": work_alt})
+            notes.append(f"go to ({gx:g}, {gy:g}) at {work_alt:g} m")
+        elif climb_to:
+            target = float(climb_to.group(1))
+            cmds.append({"type": "GOTO", "x": x, "y": y, "alt": target})
+            notes.append(f"change altitude to {target:g} m")
+        elif climb_by:
+            d = float(climb_by.group(2)) * (1 if climb_by.group(1) in ("climb", "ascend", "rise") else -1)
+            cmds.append({"type": "MOVE", "up": d})
+            notes.append(f"{'climb' if d > 0 else 'descend'} {abs(d):g} m")
+        elif moves:
+            body: dict = {}
+            world: dict = {}
+            for n, word in moves:
+                axis, sign = _DIRECTIONS[word]
+                bucket = world if axis in ("north", "east") else body
+                bucket[axis] = bucket.get(axis, 0.0) + sign * float(n)
+                notes.append(f"move {float(n):g} m {word}")
+            if world:
+                if "up" in body and not ("forward" in body or "right" in body):
+                    world["up"] = body.pop("up")
+                cmds.append({"type": "MOVE", **world})
+            if body:
+                cmds.append({"type": "MOVE", **body})
+        elif hover:
+            secs = float(hover.group(1))
+            cmds.append({"type": "HOLD", "seconds": secs})
+            notes.append(f"hover {secs:g} s")
+
+        if re.search(r"\b(take|snap|grab|capture)\b.*\b(photo|picture|image|shot)\b", text) and not survey:
+            cmds.append({"type": "CAPTURE", "label": "photo"})
+            notes.append("take a photo")
+
+        if re.search(r"\bthen\s+(land|return home|come home|go home|rtl)\b", text):
+            land = "LAND" if "land" in text.split("then")[-1] else "RTL"
+            cmds.append({"type": land})
+            notes.append("land" if land == "LAND" else "return home")
+
+        flight = [c for c in cmds if c["type"] != "TAKEOFF"]
+        if not flight and not (cmds and not airborne and m):
+            raise LLMError(
+                f"offline parser could not understand {request!r}. Try e.g. "
+                "'move 5 m left', 'climb 10 m', 'survey 40x40 m', 'orbit 20 m radius', "
+                "'go to 30, 40', 'hover 10 s', 'take a photo'.")
+
+        name = re.sub(r"[^A-Za-z0-9 _-]", "", request)[:60].strip() or "step"
+        return json.dumps({
+            "schema_version": "1.0", "mission_name": name, "vehicle": "drone",
+            "frame": "LOCAL_ENU_METERS", "cruise_speed_mps": 5.0,
+            "notes": ("Plan: " + ", then ".join(notes) + ".")[:500],
+            "commands": cmds,
+        }, sort_keys=True)
+
+
 # --------------------------------------------------------------------------- #
 # Public API
 # --------------------------------------------------------------------------- #
 
+def _auto_backend() -> str:
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    if any(os.environ.get(v) for v in HF_TOKEN_ENVS):
+        return "huggingface"
+    return "offline"
+
+
 def propose_mission_json(natural_language_request: str, backend: str = "auto") -> str:
     """Return a PROPOSED (untrusted) mission JSON string.
 
-    backend: "auto" (Hugging Face if HF_TOKEN set, else offline),
-             "huggingface" (alias "hf"), or "offline".
+    backend: "auto" (Groq if GROQ_API_KEY set, else Hugging Face if HF_TOKEN
+             set, else offline), "groq", "huggingface" (alias "hf"), or "offline".
     """
     if backend == "auto":
-        if (os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_API_KEY")
-                or os.environ.get("HF_API_TOKEN")):
-            backend = "huggingface"
-        else:
-            backend = "offline"
-            print("[llm_layer] HF_TOKEN not set -> using deterministic "
-                  "offline backend (export the token to use the real LLM).",
+        backend = _auto_backend()
+        if backend == "offline":
+            print("[llm_layer] no GROQ_API_KEY / HF_TOKEN set -> using deterministic "
+                  "offline backend (export a key to use the real LLM).",
                   file=sys.stderr)
 
+    if backend == "groq":
+        return GroqBackend().propose(natural_language_request)
     if backend in ("huggingface", "hf"):
         return HuggingFaceBackend().propose(natural_language_request)
     if backend == "offline":
         return OfflineHeuristicBackend().propose(natural_language_request)
     raise LLMError(f"unknown LLM backend '{backend}' "
-                   "(use auto|huggingface|offline)")
+                   "(use auto|groq|huggingface|offline)")
+
+
+def propose_step_json(request: str, state: dict, history: list,
+                      backend: str = "auto") -> str:
+    """Return a PROPOSED (untrusted) interactive-step JSON string.
+
+    `state` is the live vehicle snapshot shown to the model; `history` is a
+    list of {"operator": ..., "result": ...} turns (oldest first). Same
+    backend selection as propose_mission_json().
+    """
+    if backend == "auto":
+        backend = _auto_backend()
+    if backend == "groq":
+        return GroqBackend().propose_step(request, state, history)
+    if backend in ("huggingface", "hf"):
+        return HuggingFaceBackend().propose_step(request, state, history)
+    if backend == "offline":
+        return OfflineStepParser().propose_step(request, state, history)
+    raise LLMError(f"unknown LLM backend '{backend}' "
+                   "(use auto|groq|huggingface|offline)")

@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { ChevronDown, Wifi, BatteryFull, SignalHigh } from 'lucide-react';
 import StackControl from './StackControl';
 import WorldSelect from './WorldSelect';
+import FlightLogs from './FlightLogs';
+import FaultPanel from './FaultPanel';
+import EnvironmentPanel from './EnvironmentPanel';
 import type { Telemetry } from '../hooks/useROS';
 
 function DroneGlyph() {
@@ -16,7 +19,10 @@ function DroneGlyph() {
   );
 }
 
-export default function TopBar({ connected, telemetry }: { connected: boolean; telemetry: Telemetry }) {
+export default function TopBar({ connected, telemetry, onReplay }: {
+  connected: boolean; telemetry: Telemetry;
+  onReplay?: (points: [number, number][], alt: number | null) => void;
+}) {
   const [clock, setClock] = useState('--:--');
 
   useEffect(() => {
@@ -48,6 +54,9 @@ export default function TopBar({ connected, telemetry }: { connected: boolean; t
         </div>
         <WorldSelect />
         <StackControl />
+        <FlightLogs onReplay={onReplay} />
+        <FaultPanel />
+        <EnvironmentPanel />
       </div>
 
       {/* centre: title. Truncates rather than pushing the bar out of shape. */}

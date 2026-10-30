@@ -164,6 +164,11 @@ if _ROS_OK:
             # target setpoint in NED; hold current position until told otherwise
             self._target_ned = (0.0, 0.0, 0.0)
             self._target_yaw = float("nan")
+            # Cleared once LAND/RTL hands control to PX4. /fmu/in/trajectory_setpoint
+            # feeds the same uORB topic PX4's auto modes write, so streaming on
+            # makes our stale hold-altitude setpoint fight the landing controller
+            # (the vehicle bounces near the ground and never registers as landed).
+            self._streaming = True
 
             self.done = False
             self.success = False
@@ -290,8 +295,10 @@ if _ROS_OK:
                     cmd.pitch_deg, 0.0)
                 self.get_logger().info(f"gimbal pitch -> {cmd.pitch_deg}°")
             elif isinstance(cmd, Land):
+                self._streaming = False
                 self._vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
             elif isinstance(cmd, ReturnToLaunch):
+                self._streaming = False
                 self._vehicle_command(
                     VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
             elif isinstance(cmd, Arm):
@@ -322,7 +329,8 @@ if _ROS_OK:
             if self.done:
                 return
             self._tick += 1
-            self._publish_stream()          # never stops: offboard heartbeat
+            if self._streaming:             # offboard heartbeat until LAND/RTL
+                self._publish_stream()
 
             # ---------- WARMUP PHASE ----------
             if self._idx == -1:

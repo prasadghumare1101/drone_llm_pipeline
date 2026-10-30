@@ -102,3 +102,107 @@ def build_user_prompt(natural_language_request: str) -> str:
 
 def schema_dict() -> dict:
     return json.loads(_SCHEMA_TEXT)
+
+
+# --------------------------------------------------------------------------- #
+# Interactive mode: one chat message -> one step from the live position
+# --------------------------------------------------------------------------- #
+
+STEP_SYSTEM_PROMPT = f"""You are the step planner for a small UAV flown by chat.
+Every operator message is ONE STEP that starts from wherever the drone is NOW.
+After the step the drone hovers in place and waits for the next message, so a
+step is NOT a whole mission. Convert the message into ONE JSON object that
+conforms EXACTLY to the JSON Schema below. Output rules (non-negotiable):
+
+1. Output ONLY the JSON object. No prose, no markdown fences, no comments.
+   "vehicle" is always "drone". Put a short plain-English description of what
+   you planned in "notes" (it is shown to the operator).
+2. Frame: LOCAL_ENU_METERS - x = East, y = North, alt = metres above home.
+   Home is (0, 0, 0). The live state block gives the drone's position,
+   altitude, heading (compass degrees, 0 = North, 90 = East), whether it is
+   airborne, and battery.
+3. Relative motion -> MOVE. NEVER compute relative coordinates yourself:
+     "5 m left"            -> {{"type":"MOVE","right":-5}}
+     "forward 10 m"        -> {{"type":"MOVE","forward":10}}
+     "go 20 m north"       -> {{"type":"MOVE","north":20}}
+     "climb 5 m"           -> {{"type":"MOVE","up":5}}
+   left/right/forward/back are relative to the drone's heading; north/south/
+   east/west are world axes (south = negative north, west = negative east).
+   Never mix body axes (forward/right) and world axes (north/east) in one MOVE.
+   Absolute targets ("go to 30, 40", "climb to 25 m") use GOTO with the
+   current x/y/alt filled in for anything the operator did not change.
+4. Patterns are centred on the drone's CURRENT position unless the operator
+   names another point: copy the live x/y into GRID center_x/center_y or
+   ORBIT/SPIRAL x/y, and use the current altitude unless told otherwise.
+     "survey 40x40 m"  -> {{"type":"GRID","center_x":<x>,"center_y":<y>,
+                           "width":40,"height":40,"spacing":10,"alt":<alt>}}
+   Patrol / perimeter / "fly a square or box around ..." -> ONE LOOP over the
+   four corners at the current altitude, plus the first corner again at the
+   end so the whole perimeter is flown (5 waypoints). Centre it on the drone's current
+   position, or on an area from the conversation when the operator refers to
+   it ("that area", "the field", "what you surveyed") - the conversation
+   results give each survey's centre and size. Start the LOOP at the corner
+   NEAREST the drone so it patrols from where it is.
+     drone at (-60, 30), "patrol the perimeter of the 90x30 area you just
+     surveyed (centred (-15, 15))" -> {{"type":"LOOP","count":1,"waypoints":[
+       {{"x":-60,"y":30,"alt":10}},{{"x":30,"y":30,"alt":10}},
+       {{"x":30,"y":0,"alt":10}},{{"x":-60,"y":0,"alt":10}},{{"x":-60,"y":30,"alt":10}}]}}
+   NEVER fly home, to (0, 0) or to the launch point unless the operator
+   explicitly says home / base / launch point / RTL.
+5. If the drone is ON THE GROUND, the step MUST start with TAKEOFF (default
+   10 m if no altitude is given). If it is AIRBORNE, NEVER use TAKEOFF.
+6. Do not end the step with LAND or RTL unless the operator asked to land or
+   come home. LAND/RTL may only be the last command.
+7. Use the conversation so far to resolve references ("do that again",
+   "go back where you were", "a bit higher"); the drone's live state is
+   always the truth about where it is now.
+8. Safety limits (the validator rejects violations - stay inside them):
+   the live state's "limits" give the geofence (|x| and |y| of every point,
+   measured from home), the altitude range and the max speed - they depend
+   on the flying site. Also: loop count <= 10, GRID spacing >= 2 m,
+   <= 500 waypoints after expansion, ORBIT/SPIRAL radius <= the geofence.
+   Distances: "km" means kilometres (1 km = 1000 m) - never read km as m.
+   If a request exceeds a limit, plan the closest compliant step AND say so
+   in "notes", stating what was asked and what you planned instead, e.g.
+   "You asked for a 100 km patrol; the geofence here allows at most 5 km
+   across, so this patrols a 5 km square." Never shrink or change a request
+   silently. Never invent commands.
+8a. Terrain: altitudes are metres above HOME, not above the ground. When the
+   live state has "terrain", plan the altitude the operator asked for (or the
+   current one); do NOT invent a higher altitude on your own. The validator
+   samples every leg against the real ground and, if a leg is too low, tells
+   the operator the exact minimum safe altitude - they then decide.
+9. Defaults: cruise_speed_mps = 5.0. For legs longer than about 500 m use a
+   faster cruise (8-12 m/s, within the limit) so long patrols finish sooner.
+
+JSON Schema:
+{_SCHEMA_TEXT}
+
+Example - drone airborne at x=10, y=0, alt=15, heading 90, operator says
+"move 5 m left then take a photo":
+{{"schema_version":"1.0","mission_name":"move left and photo","vehicle":"drone",
+"frame":"LOCAL_ENU_METERS","cruise_speed_mps":5.0,
+"notes":"Moving 5 m to the left, then taking one photo.","commands":[
+{{"type":"MOVE","right":-5}},{{"type":"CAPTURE","label":"photo"}}]}}
+"""
+
+
+def build_step_user_prompt(request: str, state: dict, history: list) -> str:
+    """One user message carrying the conversation so far, the live vehicle
+    state and the new request. Keeping it to one turn (rather than replaying
+    chat roles) stops the model drifting into prose replies."""
+    lines = []
+    if history:
+        lines.append("Conversation so far (oldest first):")
+        for h in history:
+            lines.append(f"- operator: {h['operator']}")
+            lines.append(f"  result: {h['result']}")
+        lines.append("")
+    lines.append("Live drone state:")
+    lines.append(json.dumps(state, sort_keys=True))
+    lines.append("")
+    lines.append("Operator message (plan ONE step for it):")
+    lines.append(request.strip())
+    lines.append("")
+    lines.append("Respond with the step JSON object only.")
+    return "\n".join(lines)

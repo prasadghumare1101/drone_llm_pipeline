@@ -1,0 +1,40 @@
+{
+  "_comment": "Aerial basemaps for the MISSION MAP, per Gazebo world. 'affine' maps the world/PX4 local frame (x = East, y = North, metres) to texture pixels: u = a*x + b*y + c, v = d*x + e*y + f. Calibrated by spawning a downward camera at known positions in the running world and SIFT-matching its frames against the texture; 'validation_error_m' is the error at held-out positions. 'geofence_half_side_m' (optional) widens the interactive session's geofence for this world from the default 200 m; keep it inside the terrain. 'terrain' places the world's DEM (centred on home, north up, size_m = east-west, north-south) for the terrain-clearance check; fitted to Gazebo's ground with a downward depth camera at 12 points.",
+  "mcmillan_airfield": {
+    "texture": "mcmillan_airfield/media/textures/mcmillan_color.png",
+    "affine": [
+      [
+        0.877609,
+        0.000452,
+        2526.29
+      ],
+      [
+        0.000738,
+        -0.876018,
+        2523.71
+      ]
+    ],
+    "texture_size_px": [
+      5000,
+      4995
+    ],
+    "validation_error_m": [
+      0.4,
+      3.8,
+      7.2
+    ],
+    "calibrated": "2026-10-29",
+    "geofence_half_side_m": 2500,
+    "terrain": {
+      "dem": "mcmillan_airfield/media/mcmillan_elevation.tif",
+      "size_m": [
+        5800,
+        5740
+      ],
+      "fit_rms_m": 0.64,
+      "fit_max_err_m": 1.34
+    },
+    "min_terrain_clearance_m": 10,
+    "rtl_alt_m": 30
+  }
+}

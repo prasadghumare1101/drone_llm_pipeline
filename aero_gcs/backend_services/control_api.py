@@ -24,12 +24,15 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -76,6 +79,13 @@ SITL_ENV: Dict[str, str] = {
     "NO_PXH": "1",
     # Drop the gzclient follow-camera plugin: less GUI load, fewer stalls.
     "PX4_NO_FOLLOW_MODE": "1",
+    # Do NOT let sitl_run.sh start the Gazebo window: it launches it as
+    # `nice -n 20 gzclient`, and at that priority the window cannot drain its
+    # updates fast enough - Gazebo's send queue overflows ("Queue limit reached
+    # for topic .../user_camera/pose"), the window loses the master and freezes
+    # while the sim keeps running. The "gui" service below starts it instead,
+    # at normal priority, and _gui_watchdog() restarts it if it ever freezes.
+    "HEADLESS": "1",
 }
 
 # Hard ceiling on any captured service log. Defence in depth for the runaway
@@ -92,13 +102,24 @@ def _sitl_target() -> str:
     world = SIM_CONFIG["world"]
     if not world or world in ("default", "empty"):
         return f"gazebo-classic_{model}"
+    if not (WORLDS_DIR / f"{world}.world").is_file():
+        # PX4's CMake only generates targets for its own worlds; others (e.g.
+        # built by world_builder.py) launch the bare target + PX4_SITL_WORLD.
+        return f"gazebo-classic_{model}"
     return f"gazebo-classic_{model}__{world}"
 
 
+# Worlds built from real locations by world_builder.py (launched by path).
+GENERATED_WORLDS = SERVICES_DIR.parent / "sim_worlds"
+WORLD_OVERRIDES = Path.home() / "ws_offboard_control" / "sitl_worlds"
+
+
 def _list_worlds() -> List[str]:
-    if not WORLDS_DIR.is_dir():
-        return ["empty"]
-    return sorted(p.stem for p in WORLDS_DIR.glob("*.world"))
+    names = set()
+    for d in (WORLDS_DIR, WORLD_OVERRIDES, GENERATED_WORLDS):
+        if d.is_dir():
+            names.update(p.stem for p in d.glob("*.world") if not p.stem.endswith("__env"))
+    return sorted(names) or ["empty"]
 
 
 def _list_models() -> List[str]:
@@ -147,6 +168,10 @@ class Service:
         # hung launch completely undiagnosable from the dashboard.
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.log_path = LOG_DIR / f"{self.name}.log"
+        if self.log_path.is_file() and self.log_path.stat().st_size:
+            # keep the previous run's log: after a crash + automatic restart it
+            # is the only evidence of what went wrong
+            self.log_path.replace(self.log_path.with_suffix(".log.prev"))
         self._log_fh = self.log_path.open("w", buffering=1, encoding="utf-8",
                                           errors="replace")
         self.proc = subprocess.Popen(
@@ -206,6 +231,10 @@ SERVICES: Dict[str, Service] = {
         "telemetry",
         _sourced(f"python3 {SERVICES_DIR / 'telemetry_node.py'}", with_ws=True),
         PIPELINE_ROOT, "/gcs/consolidated_telemetry"),
+    # Gazebo window. argv is fixed; env is copied from the running gzserver at
+    # start (see _prepare_gui) so it sees exactly the same models and plugins.
+    "gui": Service(
+        "gui", ["gzclient", "--verbose"], Path.home(), "Gazebo window"),
     "video": Service(
         "video",
         # needs rclpy: the FPV feed comes from a Gazebo ROS camera topic
@@ -214,7 +243,7 @@ SERVICES: Dict[str, Service] = {
 }
 
 # Order matters: agent before SITL so the DDS link comes up cleanly.
-START_ORDER = ["agent", "sitl", "rosbridge", "telemetry", "video"]
+START_ORDER = ["agent", "sitl", "gui", "rosbridge", "telemetry", "video"]
 
 
 # --------------------------------------------------------------------------- #
@@ -347,8 +376,9 @@ MISSION = MissionState()
 
 
 def _enu_to_latlon(east: float, north: float) -> tuple:
-    lat = HOME_LAT + (north / 111_320.0)
-    lon = HOME_LON + (east / (111_320.0 * math.cos(math.radians(HOME_LAT))))
+    home_lat, home_lon = _home()
+    lat = home_lat + (north / 111_320.0)
+    lon = home_lon + (east / (111_320.0 * math.cos(math.radians(home_lat))))
     return round(lat, 6), round(lon, 6)
 
 
@@ -471,8 +501,10 @@ def _run_mission(prompt: str) -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    threading.Thread(target=_gui_watchdog, daemon=True, name="gui-watchdog").start()
     yield
     # never leave orphaned SITL/gazebo processes behind on API shutdown
+    SESSION_SVC.stop()
     for name in reversed(START_ORDER):
         SERVICES[name].stop()
 
@@ -555,14 +587,12 @@ def _wait_for_sitl(timeout_s: float) -> bool:
     while time.monotonic() < deadline:
         if not SERVICES["sitl"].running:
             return False                      # SITL exited -> build/world error
-        try:
-            out = subprocess.run(["pgrep", "-f", "gzserver"],
-                                 capture_output=True, text=True, timeout=5)
-            if out.stdout.strip():
-                time.sleep(2.0)               # let the world settle
-                return True
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
+        # exact process name + a listening master: `pgrep -f gzserver` also
+        # matched the `pgrep -x gzserver` line inside setup_gazebo.bash and
+        # declared the world ready before the server even existed
+        if _pid_of("gzserver") is not None and _master_listening():
+            time.sleep(2.0)                   # let the world settle
+            return True
         time.sleep(1.0)
     return False
 
@@ -571,6 +601,70 @@ def _wait_for_sitl(timeout_s: float) -> bool:
 def sim_config() -> dict:
     return {**SIM_CONFIG, "target": _sitl_target(),
             "worlds": _list_worlds(), "models": _list_models()}
+
+
+# --------------------------------------------------------------------------- #
+# Aerial basemap for the MISSION MAP (worlds listed in basemaps.json)
+#
+# The image is the world's own Gazebo terrain texture, so the map shows exactly
+# the ground the simulated drone flies over. It is read from the local Gazebo
+# model (never committed - it is ~60 MB) and cached as a JPEG.
+# --------------------------------------------------------------------------- #
+
+BASEMAPS_FILE = SERVICES_DIR / "basemaps.json"          # committed (McMillan calibration)
+SITES_FILE = SERVICES_DIR / "cache" / "sites.json"      # local, built by world_builder.py
+BASEMAP_CACHE = SERVICES_DIR / "cache"
+
+
+def _basemap_entry(world: str) -> Optional[dict]:
+    for f in (SITES_FILE, BASEMAPS_FILE):
+        try:
+            entry = json.loads(f.read_text(encoding="utf-8")).get(world)
+        except (OSError, ValueError):
+            continue
+        if entry:
+            return entry
+    return None
+
+
+def _find_texture(rel: str) -> Optional[Path]:
+    dirs = [MODELS_DIR, Path.home() / ".gazebo" / "models"]
+    dirs += [Path(d) for d in os.environ.get("GAZEBO_MODEL_PATH", "").split(":") if d]
+    for d in dirs:
+        if (d / rel).is_file():
+            return d / rel
+    return None
+
+
+@app.get("/api/sim/basemap")
+def sim_basemap() -> dict:
+    """Aerial image + its placement in the local ENU frame for the selected world."""
+    world = SIM_CONFIG["world"]
+    entry = _basemap_entry(world)
+    if not entry or not _find_texture(entry["texture"]):
+        return {"available": False, "world": world}
+    (a, _, c), (_, e, f) = entry["affine"]
+    w, h = entry["texture_size_px"]
+    # u = a*x + c, v = e*y + f  (the cross terms are < 0.05 deg of rotation)
+    return {"available": True, "world": world, "url": f"/api/sim/basemap/{world}.jpg",
+            "bounds": {"west": -c / a, "east": (w - c) / a, "north": -f / e, "south": (h - f) / e},
+            "metres_per_px": round(1.0 / a, 3),
+            "validation_error_m": entry.get("validation_error_m")}
+
+
+@app.get("/api/sim/basemap/{world}.jpg")
+def sim_basemap_image(world: str):
+    entry = _basemap_entry(world)
+    src = _find_texture(entry["texture"]) if entry else None
+    if src is None:
+        return JSONResponse({"detail": f"no basemap for '{world}'"}, status_code=404)
+    out = BASEMAP_CACHE / f"{world}.jpg"
+    if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
+        from PIL import Image                      # only needed the first time
+        BASEMAP_CACHE.mkdir(parents=True, exist_ok=True)
+        Image.open(src).convert("RGB").save(out, "JPEG", quality=85)
+    return FileResponse(out, media_type="image/jpeg",
+                        headers={"Cache-Control": "max-age=3600"})
 
 
 @app.post("/api/sim/config")
@@ -590,6 +684,253 @@ def set_sim_config(model: Optional[str] = None,
     return {"ok": True, **sim_config()}
 
 
+# --------------------------------------------------------------------------- #
+# Gazebo window (gzclient): normal priority + self-healing
+# --------------------------------------------------------------------------- #
+
+GUI_STATE = {"wanted": False, "misses": 0, "started": 0.0, "restarts": 0}
+GUI_CHECK_S = 5.0
+GUI_GRACE_S = 20.0           # a fresh window needs a moment to reach the master
+GUI_MAX_MISSES = 3           # ~15 s without a master connection = frozen
+
+
+def _pid_of(name: str) -> Optional[int]:
+    try:
+        out = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True,
+                             timeout=5).stdout.split()
+        return int(out[0]) if out else None
+    except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+        return None
+
+
+def _prepare_gui() -> bool:
+    """Give the window gzserver's environment (models, plugins, libraries).
+    PX4's setup_gazebo.bash is deliberately NOT sourced: on this machine it
+    kills any running gzserver/gzclient/px4 first."""
+    pid = _pid_of("gzserver")
+    if pid is None:
+        return False
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError:
+        return False
+    env = dict(kv.decode("utf-8", "replace").split("=", 1) for kv in raw if b"=" in kv)
+    SERVICES["gui"].env = env
+    return True
+
+
+def _master_listening() -> bool:
+    try:
+        out = subprocess.run(["ss", "-ltn"], capture_output=True, text=True, timeout=5).stdout
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return True
+    return ":11345 " in out
+
+
+def _start_gui(wait_s: float = 30.0) -> None:
+    # Wait for the Gazebo master to listen: by then PX4's launch script has
+    # sourced setup_gazebo.bash, which on this machine kills any gzclient it
+    # finds - a window started earlier would be shot down immediately.
+    deadline = time.monotonic() + wait_s
+    while not _master_listening() and time.monotonic() < deadline:
+        time.sleep(0.5)
+    if _prepare_gui():
+        SERVICES["gui"].start()
+        GUI_STATE.update(started=time.monotonic(), misses=0)
+
+
+def _gui_has_master(pid: int) -> bool:
+    """True while the window holds its connection to the Gazebo master (a
+    window that lost it is frozen). NOTE: the master's unread backlog on this
+    connection is NOT a usable signal here - on this setup every window shows
+    one ~2.9 KB backlog seconds after start while still rendering normally."""
+    try:
+        out = subprocess.run(["ss", "-tnp"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return True               # can't tell -> don't restart on a guess
+    return any(f"pid={pid}," in line and ":11345" in line.split()[4]
+               for line in out.splitlines() if len(line.split()) > 4)
+
+
+def _gui_watchdog() -> None:
+    while True:
+        time.sleep(GUI_CHECK_S)
+        gui = SERVICES["gui"]
+        sitl = SERVICES["sitl"]
+        server_up = _pid_of("gzserver") is not None
+        if sitl.running and not server_up and time.monotonic() - GUI_STATE["started"] > 60:
+            # PX4 is still up waiting for a simulator that died: say so, loudly
+            if "CRASHED" not in sitl.detail:
+                sitl.detail += " - Gazebo server CRASHED: STOP SIM, then START SIM"
+                print("[control_api] gzserver is gone while SITL runs", flush=True)
+        if not GUI_STATE["wanted"] or not sitl.running or not server_up:
+            continue
+        reason = ""
+        if gui.proc is None:
+            continue                             # not launched yet (stack still starting)
+        if not gui.running:
+            if gui.proc.returncode == 0:
+                GUI_STATE["wanted"] = False      # the operator closed the window
+                continue
+            reason = "exited"
+        elif time.monotonic() - GUI_STATE["started"] > GUI_GRACE_S:
+            if _gui_has_master(gui.proc.pid):
+                GUI_STATE["misses"] = 0
+            else:
+                GUI_STATE["misses"] += 1
+                if GUI_STATE["misses"] >= GUI_MAX_MISSES:
+                    reason = "lost the Gazebo master (frozen)"
+        if reason:
+            GUI_STATE["restarts"] += 1
+            gui.stop()
+            _start_gui()
+            gui.detail = f"Gazebo window (auto-restarted {GUI_STATE['restarts']}x)"
+            print(f"[control_api] Gazebo window {reason} - restarted", flush=True)
+
+
+# --------------------------------------------------------------------------- #
+# Simulated environment for a real location (see environment.py): GPS / magnetic
+# field / air pressure of that place + its weather as Gazebo wind. Saved to a
+# file so it survives restarts; applied on the next START SIM.
+# --------------------------------------------------------------------------- #
+
+ENV_FILE = SERVICES_DIR / "cache" / "environment.json"
+ENV_ACTIVE: Dict[str, object] = {}          # what the running sim was started with
+
+
+def _env_load() -> dict:
+    try:
+        return json.loads(ENV_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"enabled": False}
+
+
+def _home() -> tuple:
+    if ENV_ACTIVE.get("enabled"):
+        return float(ENV_ACTIVE["lat"]), float(ENV_ACTIVE["lon"])
+    return HOME_LAT, HOME_LON
+
+
+def _world_file(world: str) -> Optional[Path]:
+    """Where sitl_run.sh would load `world` from (project override dir first)."""
+    for d in (GENERATED_WORLDS, WORLD_OVERRIDES, WORLDS_DIR):
+        if (d / f"{world}.world").is_file():
+            return d / f"{world}.world"
+    return None
+
+
+def _apply_environment() -> str:
+    """Set the SITL launch environment for the configured location / weather."""
+    import environment as envmod
+    env = _env_load()
+    SERVICES["sitl"].env = dict(SITL_ENV)
+    ENV_ACTIVE.clear()
+    src = _world_file(SIM_CONFIG["world"] if SIM_CONFIG["world"] not in ("", "default") else "empty")
+    site = (_basemap_entry(src.stem) or {}).get("location") if src else None
+    if site:
+        # A world built from a real place IS that place: GPS home must match its
+        # terrain, whatever location the ENVIRONMENT panel holds. Only the
+        # weather is taken from there.
+        env = {**env, "lat": site["lat"], "lon": site["lon"], "alt_msl": site["alt_msl"],
+               "name": src.stem}
+        if not env.get("enabled"):
+            env.update(enabled=True, wind_mps=0.0, gust_mps=0.0)
+    if not env.get("enabled"):
+        if src is not None and src.parent == GENERATED_WORLDS:
+            SERVICES["sitl"].env["PX4_SITL_WORLD"] = str(src)
+        return envmod.summary(None)
+    if src is None:
+        return "environment skipped: world file not found"
+    world = envmod.build_world(src, SERVICES_DIR / "cache" / "worlds" / f"{src.stem}__env.world", env)
+    SERVICES["sitl"].env.update({
+        "PX4_HOME_LAT": f"{float(env['lat']):.7f}", "PX4_HOME_LON": f"{float(env['lon']):.7f}",
+        "PX4_HOME_ALT": f"{float(env.get('alt_msl', 0.0)):.1f}", "PX4_SITL_WORLD": str(world)})
+    ENV_ACTIVE.update(env)
+    return envmod.summary(env)
+
+
+class EnvConfig(BaseModel):
+    enabled: bool = True
+    name: str = "location"
+    lat: float
+    lon: float
+    alt_msl: float = 0.0
+    wind_mps: float = 0.0
+    wind_from_deg: float = 0.0
+    gust_mps: float = 0.0
+    temp_c: Optional[float] = None
+    weather_time: Optional[str] = None
+
+
+@app.get("/api/sim/environment")
+def sim_environment() -> dict:
+    import environment as envmod
+    return {"config": _env_load(), "active": dict(ENV_ACTIVE), "active_summary": envmod.summary(ENV_ACTIVE)}
+
+
+@app.post("/api/sim/environment/weather")
+def sim_environment_weather(lat: float, lon: float) -> dict:
+    """Live weather at a location (Open-Meteo; only lat/lon are sent)."""
+    import environment as envmod
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return {"ok": False, "detail": "latitude / longitude out of range"}
+    try:
+        return {"ok": True, "weather": envmod.fetch_weather(lat, lon)}
+    except Exception as e:                         # offline, rate-limited, ...
+        return {"ok": False, "detail": f"weather service unavailable: {e}"}
+
+
+@app.post("/api/sim/environment")
+def set_sim_environment(cfg: EnvConfig) -> dict:
+    if not (-90 <= cfg.lat <= 90 and -180 <= cfg.lon <= 180):
+        return {"ok": False, "detail": "latitude / longitude out of range"}
+    if not (0 <= cfg.wind_mps <= 30 and 0 <= cfg.gust_mps <= 40):
+        return {"ok": False, "detail": "wind outside 0-30 m/s (gusts 0-40)"}
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ENV_FILE.write_text(json.dumps(cfg.model_dump(), indent=2), encoding="utf-8")
+    return {"ok": True, "detail": "saved - applies on the next START SIM", "config": cfg.model_dump()}
+
+
+BUILD = {"state": "idle", "log": [], "result": None, "error": None}
+
+
+class WorldBuildRequest(BaseModel):
+    name: str
+    lat: float
+    lon: float
+    size_m: float = 2000.0
+
+
+def _build_world(req: WorldBuildRequest) -> None:
+    import world_builder
+    try:
+        BUILD["result"] = world_builder.build(req.name, req.lat, req.lon, req.size_m,
+                                              progress=lambda t: BUILD["log"].append(t))
+        BUILD["state"] = "done"
+    except Exception as e:
+        BUILD.update(state="error", error=f"{type(e).__name__}: {e}")
+
+
+@app.post("/api/sim/worlds/build")
+def sim_world_build(req: WorldBuildRequest) -> dict:
+    """Build a Gazebo world of a real location (SRTM terrain + aerial image)."""
+    if BUILD["state"] == "running":
+        return {"ok": False, "detail": "a world is already being built"}
+    if not (-60 <= req.lat <= 60 and -180 <= req.lon <= 180):
+        return {"ok": False, "detail": "latitude must be within ±60 (SRTM coverage)"}
+    if not 500 <= req.size_m <= 3000:
+        return {"ok": False, "detail": "size must be 500-3000 m"}
+    BUILD.update(state="running", log=[], result=None, error=None)
+    threading.Thread(target=_build_world, args=(req,), daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/sim/worlds/build")
+def sim_world_build_status() -> dict:
+    return {**BUILD, "log": BUILD["log"][-8:]}
+
+
 @app.post("/api/stack/start")
 def stack_start() -> dict:
     # Always start from a clean slate: a surviving gzserver from the previous
@@ -597,8 +938,16 @@ def stack_start() -> dict:
     _reap_orphans()
     _clean_scratch()
     _apply_sim_config()
+    SERVICES["sitl"].detail += f" | env: {_apply_environment()}"
     time.sleep(1.0)
+    GUI_STATE.update(wanted=True, restarts=0)
+    ACTIVE_FAULTS.clear()
+    SERVICES["gui"].detail = "Gazebo window"
     for name in START_ORDER:
+        if name == "gui":
+            _start_gui()
+            time.sleep(1.0)
+            continue
         SERVICES[name].start()
         if name == "sitl":
             # Wait for the world to finish loading rather than guessing. This is
@@ -611,6 +960,9 @@ def stack_start() -> dict:
 
 @app.post("/api/stack/stop")
 def stack_stop() -> dict:
+    GUI_STATE["wanted"] = False
+    ACTIVE_FAULTS.clear()              # a fresh PX4 starts with every sensor healthy
+    SESSION_SVC.stop()          # it holds the vehicle link; stop it first
     for name in reversed(START_ORDER):
         SERVICES[name].stop()
     # `make px4_sitl` spawns gzserver/gzclient outside our process group, so
@@ -661,13 +1013,18 @@ def logs_purge(confirm: bool = False) -> dict:
 
 @app.post("/api/stack/start/{name}")
 def start_one(name: str) -> dict:
-    if name in SERVICES:
+    if name == "gui":
+        GUI_STATE["wanted"] = True
+        _start_gui()
+    elif name in SERVICES:
         SERVICES[name].start()
     return stack_status()
 
 
 @app.post("/api/stack/stop/{name}")
 def stop_one(name: str) -> dict:
+    if name == "gui":
+        GUI_STATE["wanted"] = False
     if name in SERVICES:
         SERVICES[name].stop()
     return stack_status()
@@ -687,6 +1044,8 @@ def mission_status() -> dict:
 def mission_run(req: MissionRequest) -> dict:
     if MISSION.running:
         return {"ok": False, "detail": "a mission is already running"}
+    if SESSION_SVC.running:     # exactly one offboard commander
+        return {"ok": False, "detail": "an interactive session owns the vehicle - stop it first"}
     MISSION.log = []
     MISSION.llm_status = "LLM PLANNING MISSION…"
     threading.Thread(target=_run_mission, args=(req.prompt,), daemon=True).start()
@@ -703,6 +1062,281 @@ def mission_abort() -> dict:
             pass
         MISSION.llm_status = "MISSION ABORTED BY OPERATOR"
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Interactive session (one chat message = one step) - see docs/INTERACTIVE_MODE.md
+#
+# The session runs in its own process (session_service.py) because it holds a
+# live rclpy vehicle link; this API only starts/stops it and proxies requests.
+# --------------------------------------------------------------------------- #
+
+SESSION_PORT = 8001
+SESSION_URL = f"http://127.0.0.1:{SESSION_PORT}"
+SESSION_SVC = Service("session", [], PIPELINE_ROOT, "interactive session :8001")
+
+
+def _session_call(method: str, path: str, body: Optional[dict] = None,
+                  timeout: float = 10.0) -> dict:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(f"{SESSION_URL}{path}", data=data, method=method,
+                                 headers={"content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return {"ok": False, "reply": f"session service unreachable ({e})"}
+
+
+@app.post("/api/session/start")
+def session_start(backend: str = "px4", llm: Optional[str] = None) -> dict:
+    if backend not in ("px4", "sim"):
+        return {"ok": False, "detail": f"unknown backend '{backend}'"}
+    if SESSION_SVC.running:
+        return {"ok": True, "detail": "already running"}
+    if MISSION.running:
+        return {"ok": False, "detail": "a one-shot mission is running - wait or abort it"}
+    if backend == "px4" and not SERVICES["sitl"].running:
+        return {"ok": False, "detail": "start the simulation first (START SIM)"}
+    llm = llm or os.environ.get("AERO_LLM", "auto")
+    cmd = (f"python3 {SERVICES_DIR / 'session_service.py'} --backend {backend} "
+           f"--llm {llm} --port {SESSION_PORT}")
+    site = _basemap_entry(SIM_CONFIG["world"]) or {}
+    fence = site.get("geofence_half_side_m")
+    if backend == "px4" and fence:          # the site is only known for the Gazebo world
+        cmd += f" --geofence {float(fence):g}"
+    terrain = site.get("terrain") or {}
+    dem = _find_texture(terrain["dem"]) if backend == "px4" and terrain.get("dem") else None
+    if dem:                                 # ground heights for the clearance check
+        w, h = terrain["size_m"]
+        cmd += (f" --terrain-dem {dem} --terrain-size {float(w):g} {float(h):g}"
+                f" --clearance {float(site.get('min_terrain_clearance_m', 10)):g}"
+                f" --rtl-alt {float(site.get('rtl_alt_m', 30)):g}")
+    SESSION_SVC.argv = _sourced(cmd, with_ws=True) if backend == "px4" else ["bash", "-c", f"exec {cmd}"]
+    SESSION_SVC.detail = (f"interactive session ({backend}, llm={llm}"
+                          + (f", geofence ±{float(fence):g} m" if backend == "px4" and fence else "")
+                          + (", terrain-aware)" if dem else ")"))
+    SESSION_SVC.start()
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        if not SESSION_SVC.running:
+            return {"ok": False, "detail": "session failed to start:\n" + SESSION_SVC.tail(15)}
+        st = _session_call("GET", "/status", timeout=1.0)
+        if st.get("active"):
+            return {"ok": True, "detail": SESSION_SVC.detail}
+        time.sleep(0.3)
+    return {"ok": False, "detail": "session did not come up:\n" + SESSION_SVC.tail(15)}
+
+
+@app.post("/api/session/stop")
+def session_stop() -> dict:
+    SESSION_SVC.stop()
+    return {"ok": True}
+
+
+@app.get("/api/session/status")
+def session_status(since: int = 0) -> dict:
+    if not SESSION_SVC.running:
+        return {"active": False}
+    st = _session_call("GET", f"/status?since={since}", timeout=2.0)
+    for w in (st.get("step") or {}).get("waypoints", []):
+        w["lat"], w["lon"] = _enu_to_latlon(w["x"], w["y"])
+    return st
+
+
+@app.post("/api/session/message")
+def session_message(req: MissionRequest) -> dict:
+    if not SESSION_SVC.running:
+        return {"ok": False, "reply": "no interactive session - start one first"}
+    return _session_call("POST", "/message", {"text": req.prompt})
+
+
+@app.post("/api/session/command/{name}")
+def session_command(name: str) -> dict:
+    if not SESSION_SVC.running:
+        return {"ok": False, "reply": "no interactive session"}
+    return _session_call("POST", f"/command/{name}")
+
+
+class PathRequest(BaseModel):
+    points: List[List[float]]
+    alt: Optional[float] = None
+    circuit: bool = False
+    where: str = "end"
+
+
+@app.post("/api/session/path")
+def session_path(req: PathRequest) -> dict:
+    if not SESSION_SVC.running:
+        return {"ok": False, "reply": "no interactive session"}
+    return _session_call("POST", "/path", req.model_dump())
+
+
+@app.post("/api/session/insert")
+def session_insert(req: PathRequest) -> dict:
+    if not SESSION_SVC.running:
+        return {"ok": False, "reply": "no interactive session"}
+    return _session_call("POST", "/insert", req.model_dump())
+
+
+@app.post("/api/session/arm")
+def session_arm() -> dict:
+    if not SESSION_SVC.running:
+        return {"ok": False, "reply": "no interactive session"}
+    return _session_call("POST", "/arm", timeout=15.0)
+
+
+@app.post("/api/session/sim/rc")
+def session_sim_rc(on: bool = True) -> dict:
+    return _session_call("POST", f"/sim/rc?on={'true' if on else 'false'}")
+
+
+# --------------------------------------------------------------------------- #
+# Sensor / motor fault injection into PX4 SITL (`failure` command; needs
+# SYS_FAILURE_EN=1). Only what this PX4's simulator really implements is
+# offered. Note: GPS "wrong" is a ~111 km jump (spoof / gross glitch), not
+# gradual drift - PX4 SITL has no drift or wind injection.
+# --------------------------------------------------------------------------- #
+
+FAULT_CATALOG = {
+    "gps": {"off": "GPS lost", "stuck": "GPS position frozen", "wrong": "GPS jump/spoof (~111 km)"},
+    "mag": {"off": "compass dead", "stuck": "compass frozen"},
+    "baro": {"off": "barometer dead", "stuck": "barometer frozen"},
+    "accel": {"off": "accelerometer dead", "stuck": "accelerometer frozen"},
+    "gyro": {"off": "gyro dead", "stuck": "gyro frozen"},
+    "motor": {"off": "motor stopped"},
+}
+ACTIVE_FAULTS: Dict[str, str] = {}
+
+
+def _px4_failure(component: str, ftype: str, instance: int = 0) -> tuple:
+    exe = PX4_DIR / "build" / "px4_sitl_default" / "bin" / "px4-failure"
+    try:
+        out = subprocess.run([str(exe), component, ftype, "-i", str(instance)],
+                             cwd=str(exe.parent.parent), capture_output=True, text=True, timeout=10)
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        return False, str(e)
+    text = re.sub(r"\x1b\[[0-9;]*m", "", out.stdout + out.stderr).strip()
+    return out.returncode == 0, text
+
+
+def _session_note(text: str) -> None:
+    if SESSION_SVC.running:
+        _session_call("POST", "/note", {"text": text}, timeout=2.0)
+
+
+@app.get("/api/sim/faults")
+def sim_faults() -> dict:
+    return {"catalog": FAULT_CATALOG, "active": ACTIVE_FAULTS}
+
+
+@app.post("/api/sim/fault")
+def sim_fault(component: str, type: str, instance: int = 0) -> dict:
+    if not SERVICES["sitl"].running:
+        return {"ok": False, "detail": "the simulation is not running"}
+    if type != "ok" and type not in FAULT_CATALOG.get(component, {}):
+        return {"ok": False, "detail": f"unsupported fault {component}/{type}"}
+    ok, text = _px4_failure(component, type, instance)
+    if ok:
+        if type == "ok":
+            ACTIVE_FAULTS.pop(component, None)
+            _session_note(f"[FAULT TEST] {component} restored")
+        else:
+            ACTIVE_FAULTS[component] = type
+            _session_note(f"[FAULT TEST] injected: {FAULT_CATALOG[component][type]}")
+    return {"ok": ok, "output": text, "active": ACTIVE_FAULTS}
+
+
+@app.post("/api/sim/fault/clear")
+def sim_fault_clear() -> dict:
+    for comp in list(ACTIVE_FAULTS):
+        sim_fault(comp, "ok")
+    return {"ok": True, "active": ACTIVE_FAULTS}
+
+
+# --------------------------------------------------------------------------- #
+# Real-flight logs: upload from the dashboard, analyse, keep the report
+#
+# Files live in <pipeline>/realFlight_logs/<flight>/ (git-ignored). Names are
+# sanitised to one path component each, so an upload can never write outside it.
+# --------------------------------------------------------------------------- #
+
+FLIGHT_LOGS = PIPELINE_ROOT / "realFlight_logs"
+FLIGHT_LOG_MAX_BYTES = 400 * 1024 * 1024
+LOG_EXTS = (".bin", ".tlog", ".json", ".txt", ".log", ".csv")
+
+
+def _safe(name: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9._-]", "_", name or "").strip("._")[:120]
+    return s or "unnamed"
+
+
+def _flight_dir(flight: str) -> Path:
+    return FLIGHT_LOGS / _safe(flight)
+
+
+@app.get("/api/flightlogs")
+def flightlogs_list() -> dict:
+    flights = []
+    if FLIGHT_LOGS.is_dir():
+        for d in sorted((p for p in FLIGHT_LOGS.iterdir() if p.is_dir()), reverse=True):
+            files = [{"name": f.name, "bytes": f.stat().st_size}
+                     for f in sorted(d.iterdir()) if f.is_file() and f.name != "report.json"]
+            flights.append({"flight": d.name, "files": files,
+                            "analyzed": (d / "report.json").is_file()})
+    return {"dir": str(FLIGHT_LOGS), "flights": flights}
+
+
+@app.post("/api/flightlogs/upload")
+async def flightlogs_upload(request: Request, flight: str, name: str) -> dict:
+    """Raw body = the file (no multipart dependency). One call per file."""
+    fname = _safe(name)
+    if not fname.lower().endswith(LOG_EXTS):
+        return {"ok": False, "detail": f"unsupported file type (use {', '.join(LOG_EXTS)})"}
+    d = _flight_dir(flight)
+    d.mkdir(parents=True, exist_ok=True)
+    dest, size = d / fname, 0
+    with dest.open("wb") as fh:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > FLIGHT_LOG_MAX_BYTES:
+                fh.close()
+                dest.unlink(missing_ok=True)
+                return {"ok": False, "detail": "file larger than 400 MB"}
+            fh.write(chunk)
+    return {"ok": True, "flight": d.name, "file": fname, "bytes": size}
+
+
+@app.post("/api/flightlogs/{flight}/analyze")
+def flightlogs_analyze(flight: str, file: Optional[str] = None) -> dict:
+    """Analyse one log of the flight (default: the dataflash .BIN, else the
+    largest .tlog) and store the report next to it."""
+    d = _flight_dir(flight)
+    if not d.is_dir():
+        return {"ok": False, "detail": f"no flight '{flight}'"}
+    if file:
+        target = d / _safe(file)
+    else:
+        logs = sorted((f for f in d.iterdir() if f.suffix.lower() in (".bin", ".tlog")),
+                      key=lambda f: (f.suffix.lower() != ".bin", -f.stat().st_size))
+        target = logs[0] if logs else None
+    if target is None or not target.is_file():
+        return {"ok": False, "detail": "no .BIN or .tlog in this flight"}
+    from flight_log_analyzer import analyze          # pymavlink, only needed here
+    try:
+        report = analyze(str(target))
+    except Exception as e:                            # a corrupt log must not kill the API
+        return {"ok": False, "detail": f"could not parse {target.name}: {type(e).__name__}: {e}"}
+    (d / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    return {"ok": True, "flight": d.name, "report": report}
+
+
+@app.get("/api/flightlogs/{flight}/report")
+def flightlogs_report(flight: str) -> dict:
+    f = _flight_dir(flight) / "report.json"
+    if not f.is_file():
+        return {"ok": False, "detail": "not analysed yet"}
+    return {"ok": True, "flight": _safe(flight), "report": json.loads(f.read_text(encoding="utf-8"))}
 
 
 def _port_owner(port: int) -> Optional[int]:

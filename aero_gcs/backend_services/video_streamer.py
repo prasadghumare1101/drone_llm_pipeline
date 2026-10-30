@@ -11,8 +11,13 @@ Zero-transcode path: image_transport already publishes JPEG on
 decode, no re-encode, near-zero CPU. The raw rgb8 topic is only used as a
 fallback when the compressed topic is unavailable.
 
+Two feeds: the forward FPV camera (auto-discovered) and the downward camera
+(/video_feed?cam=down) - the one to look through for surveys, landing spots and
+"what is under me".
+
 Config (env):
   AERO_CAMERA_TOPIC   base topic (default /front_camera/image_raw)
+  AERO_DOWN_CAMERA_TOPIC  downward camera (default /downward_camera/image_raw)
   AERO_FPS            max frames/sec pushed to the browser (default 15)
   AERO_JPEG_QUALITY   quality for the raw-topic fallback only (default 50)
 
@@ -70,7 +75,13 @@ class LatestFrame:
 
 
 FRAME = LatestFrame()
+DOWN_TOPIC = os.environ.get("AERO_DOWN_CAMERA_TOPIC", "/downward_camera/image_raw")
+DOWN_FRAME = LatestFrame()
 NODE = None          # set once the ROS node is created (for /health reporting)
+
+
+def _frame(cam: str) -> LatestFrame:
+    return DOWN_FRAME if cam == "down" else FRAME
 
 
 def _placeholder(msg: str = "WAITING FOR CAMERA") -> bytes:
@@ -101,6 +112,17 @@ def _rank_topic(name: str) -> int:
     return score
 
 
+def _encode(msg: Image) -> bytes | None:
+    try:
+        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
+        if msg.encoding == "rgb8":
+            arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", arr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+        return buf.tobytes() if ok else None
+    except (ValueError, cv2.error):
+        return None
+
+
 class CameraNode(Node):
     """Discovers a camera topic from the live ROS graph and streams it.
 
@@ -125,6 +147,12 @@ class CameraNode(Node):
         self.active_topic: str | None = None
         self._discover()                  # try immediately
         self.create_timer(3.0, self._discover)   # then keep re-scanning
+        # Downward camera: fixed topic. ROS 2 connects these as soon as the
+        # model's camera starts publishing, so no discovery is needed.
+        self._down_compressed = False
+        self.down_topic: str | None = None
+        self.create_subscription(CompressedImage, f"{DOWN_TOPIC}/compressed", self._on_down_compressed, self._qos)
+        self.create_subscription(Image, DOWN_TOPIC, self._on_down_raw, self._qos)
 
     # ---- topic discovery ------------------------------------------------- #
     def _discover(self) -> None:
@@ -172,6 +200,20 @@ class CameraNode(Node):
             self.active_topic = topic
             FRAME.set(bytes(msg.data))
 
+    def _on_down_compressed(self, msg: CompressedImage) -> None:
+        if "jpeg" in msg.format.lower() or "jpg" in msg.format.lower():
+            self._down_compressed = True
+            self.down_topic = f"{DOWN_TOPIC}/compressed"
+            DOWN_FRAME.set(bytes(msg.data))
+
+    def _on_down_raw(self, msg: Image) -> None:
+        if self._down_compressed:
+            return
+        jpeg = _encode(msg)
+        if jpeg:
+            self.down_topic = DOWN_TOPIC
+            DOWN_FRAME.set(jpeg)
+
     def _on_raw(self, topic: str, msg: Image) -> None:
         if self._got_compressed:          # prefer the zero-transcode path
             return
@@ -192,29 +234,31 @@ class CameraNode(Node):
 app = FastAPI(title="AEROMAST Video Streamer")
 
 
-def generate_frames():
+def generate_frames(cam: str = "front"):
     period = 1.0 / TARGET_FPS
-    blank = _placeholder()
+    frame = _frame(cam)
+    blank = _placeholder("WAITING FOR DOWNWARD CAMERA" if cam == "down" else "WAITING FOR CAMERA")
     while True:
         start = time.monotonic()
-        jpeg = FRAME.get() or blank
+        jpeg = frame.get() or blank
         yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n")
         time.sleep(max(0.0, period - (time.monotonic() - start)))
 
 
 @app.get("/video_feed")
-def video_feed() -> StreamingResponse:
+def video_feed(cam: str = "front") -> StreamingResponse:
+    """cam=front (FPV, default) or cam=down (downward camera)."""
     return StreamingResponse(
-        generate_frames(),
+        generate_frames(cam),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
 
 @app.get("/snapshot")
-def snapshot() -> Response:
+def snapshot(cam: str = "front") -> Response:
     """Single current frame. Used by the CAPTURE mission command - one cheap
     GET beats holding a second image subscription open in the bridge."""
-    jpeg = FRAME.get()
+    jpeg = _frame(cam).get()
     if jpeg is None:
         return Response(content=_placeholder("NO FRAME"), media_type="image/jpeg",
                         status_code=503)
@@ -226,7 +270,9 @@ def health() -> dict:
     active = getattr(NODE, "active_topic", None)
     subs = list(getattr(NODE, "_subs", {}).keys())
     return {"ok": True, "preferred": BASE_TOPIC, "active_topic": active,
-            "subscribed": subs, "receiving": FRAME.get() is not None}
+            "subscribed": subs, "receiving": FRAME.get() is not None,
+            "down": {"topic": getattr(NODE, "down_topic", None),
+                     "receiving": DOWN_FRAME.get() is not None}}
 
 
 def _spin_ros() -> None:

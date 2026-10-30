@@ -60,3 +60,9 @@ input[type="range"].aero-vslider::-moz-range-thumb {
   border: 1px solid #E5E7EB;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
+
+/* small action buttons in the mission-map drawing panel */
+.map-btn {
+  @apply flex items-center gap-1 px-2 py-1 rounded text-xxs font-bold bg-fuchsia-50 text-fuchsia-700
+         hover:bg-fuchsia-100 disabled:opacity-35 disabled:cursor-not-allowed;
+}

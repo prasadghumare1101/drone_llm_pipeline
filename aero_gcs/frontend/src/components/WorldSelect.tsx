@@ -28,7 +28,12 @@ export default function WorldSelect() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    // a world was just built from a real location (EnvironmentPanel)
+    window.addEventListener('aero:worlds-changed', load);
+    return () => window.removeEventListener('aero:worlds-changed', load);
+  }, [load]);
 
   const apply = async (next: { model?: string; world?: string }) => {
     setBusy(true);

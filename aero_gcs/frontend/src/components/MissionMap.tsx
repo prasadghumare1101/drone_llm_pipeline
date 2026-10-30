@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { MoreHorizontal, Plus, Minus, Camera, Layers } from 'lucide-react';
+import {
+  MoreHorizontal, Plus, Minus, Camera, Layers, PenLine, Undo2, Trash2, Repeat, ListStart, ListEnd, Play,
+} from 'lucide-react';
 import HudStrip from './HudStrip';
 import type { Telemetry } from '../hooks/useROS';
-import type { MissionWaypoint } from '../hooks/useLLM';
+import { API_BASE, type MissionWaypoint } from '../hooks/useLLM';
 
 const C = {
   bg: '#EEF2F6', grid: '#DDE4EC', gridBold: '#CBD5E1',
@@ -11,17 +13,71 @@ const C = {
   drone: '#2563EB', text: '#1F2937', muted: '#6B7280',
 };
 
+/** Aerial image of the simulated world, placed in the local ENU frame (metres). */
+interface Basemap {
+  world: string;
+  url: string;
+  bounds: { west: number; east: number; north: number; south: number };
+}
+
+/** Map drawing hooks into the interactive session (absent = drawing disabled). */
+export interface MapPlanner {
+  executing: boolean;             // a step is flying: drawn points are added to it
+  flyPath: (points: [number, number][], circuit: boolean, alt: number | null) => void;
+  addWaypoints: (points: [number, number][], where: 'next' | 'end') => void;
+}
+
 /**
  * Offline mission map. Draws the compiled ENU waypoint plan, the flown path and
  * the live vehicle marker onto a canvas - no tile server, no network, no deps.
  * Rendering happens entirely in canvas so telemetry ticks never re-render React.
+ * When the selected Gazebo world has a calibrated aerial texture (see
+ * backend_services/basemaps.json) it is drawn underneath; the Layers button
+ * toggles it. Only the visible part of the image is drawn each frame.
  */
-export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: MissionWaypoint[] }) {
+export default function MissionMap({ t, waypoints, planner }: {
+  t: Telemetry; waypoints: MissionWaypoint[]; planner?: MapPlanner;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const trailRef = useRef<Array<[number, number]>>([]);
   const [zoom, setZoom] = useState(55);
+  // drawing: click the map to place waypoints (x = East, y = North, metres)
+  const [drawing, setDrawing] = useState(false);
+  const [draft, setDraft] = useState<[number, number][]>([]);
+  const [altText, setAltText] = useState('');
+  const viewRef = useRef({ cx: 0, cy: 0, scale: 1, w: 0, h: 0 });
   const [tilt, setTilt] = useState(50);
+  const [basemap, setBasemap] = useState<Basemap | null>(null);
+  const [aerial, setAerial] = useState(true);
+  const [imgReady, setImgReady] = useState(0);      // bumps when a new image has loaded
+  const imgRef = useRef<HTMLImageElement | null>(null);
+
+  // which world is loaded can change with each START SIM, so re-check slowly
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const d = await (await fetch(`${API_BASE}/api/sim/basemap`)).json();
+        if (!alive) return;
+        setBasemap((cur) => (d.available
+          ? (cur?.url === d.url ? cur : { world: d.world, url: d.url, bounds: d.bounds })
+          : null));
+      } catch { /* control API offline: keep whatever we had */ }
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  useEffect(() => {
+    imgRef.current = null;
+    if (!basemap) return;
+    const img = new Image();
+    img.onload = () => { imgRef.current = img; setImgReady((n) => n + 1); };
+    img.src = `${API_BASE}${basemap.url}`;
+    return () => { img.onload = null; };
+  }, [basemap]);
 
   // record the flown trail (bounded, so memory can never grow unbounded)
   useEffect(() => {
@@ -55,33 +111,63 @@ export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: 
 
       // ---- world -> screen ------------------------------------------------
       const pts = waypoints.map((p) => [p.x, p.y] as [number, number]);
-      pts.push([t.x, t.y], [0, 0]);
+      pts.push([t.x, t.y], [0, 0], ...draft);
       const xs = pts.map((p) => p[0]); const ys = pts.map((p) => p[1]);
-      const spanX = Math.max(20, Math.max(...xs) - Math.min(...xs));
-      const spanY = Math.max(20, Math.max(...ys) - Math.min(...ys));
+      // with an aerial map, never zoom in tighter than 120 m by default: the
+      // imagery is ~1 m/px, so a 20 m window is just a blur
+      const minSpan = aerial && basemap ? 120 : 20;
+      const spanX = Math.max(minSpan, Math.max(...xs) - Math.min(...xs));
+      const spanY = Math.max(minSpan, Math.max(...ys) - Math.min(...ys));
       const cx = (Math.max(...xs) + Math.min(...xs)) / 2;
       const cy = (Math.max(...ys) + Math.min(...ys)) / 2;
-      const zoomK = 0.45 + (zoom / 100) * 1.3;
+      // exponential: slider 0 = ~8x wider than the fit, 100 = ~5x closer
+      const zoomK = 2 ** ((zoom - 55) / 18);
       const scale = Math.min(w / (spanX * 1.5), h / (spanY * 1.5)) * zoomK;
       const sx = (mx: number) => w / 2 + (mx - cx) * scale;
       const sy = (my: number) => h / 2 - (my - cy) * scale;   // north = up
+      viewRef.current = { cx, cy, scale, w, h };                // for click -> metres
+
+      // ---- aerial basemap (only the visible window of the image) ---------
+      const img = imgRef.current;
+      const showAerial = aerial && basemap && img;
+      if (showAerial) {
+        const b = basemap.bounds;
+        const pxPerMx = img.naturalWidth / (b.east - b.west);
+        const pxPerMy = img.naturalHeight / (b.north - b.south);
+        const x0 = Math.max(b.west, cx - w / 2 / scale);
+        const x1 = Math.min(b.east, cx + w / 2 / scale);
+        const y0 = Math.max(b.south, cy - h / 2 / scale);
+        const y1 = Math.min(b.north, cy + h / 2 / scale);
+        if (x1 > x0 && y1 > y0) {
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img,
+            (x0 - b.west) * pxPerMx, (b.north - y1) * pxPerMy,
+            (x1 - x0) * pxPerMx, (y1 - y0) * pxPerMy,
+            sx(x0), sy(y1), (x1 - x0) * scale, (y1 - y0) * scale);
+        }
+      }
 
       // ---- grid -----------------------------------------------------------
-      const stepM = spanX > 400 ? 100 : spanX > 150 ? 50 : 10;
+      const viewW = w / scale;                           // metres across the canvas
+      const viewH = h / scale;
+      const stepM = viewW > 2000 ? 500 : viewW > 800 ? 100 : viewW > 200 ? 50 : 10;
       ctx.lineWidth = 1;
+      ctx.globalAlpha = showAerial ? 0.35 : 1;
       ctx.font = '10px Inter, sans-serif';
-      for (let gx = Math.floor((cx - spanX) / stepM) * stepM; gx <= cx + spanX; gx += stepM) {
+      for (let gx = Math.floor((cx - viewW / 2) / stepM) * stepM; gx <= cx + viewW / 2; gx += stepM) {
         const px = sx(gx);
         if (px < 0 || px > w) continue;
         ctx.strokeStyle = gx === 0 ? C.gridBold : C.grid;
         ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
       }
-      for (let gy = Math.floor((cy - spanY) / stepM) * stepM; gy <= cy + spanY; gy += stepM) {
+      for (let gy = Math.floor((cy - viewH / 2) / stepM) * stepM; gy <= cy + viewH / 2; gy += stepM) {
         const py = sy(gy);
         if (py < 0 || py > h) continue;
         ctx.strokeStyle = gy === 0 ? C.gridBold : C.grid;
         ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
       }
+
+      ctx.globalAlpha = 1;
 
       // ---- planned route --------------------------------------------------
       const activeIdx = waypoints.findIndex((p) => p.active);
@@ -131,6 +217,20 @@ export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: 
         ctx.fillText(String(p.idx), px + 10, py - 6);
       });
 
+      // ---- drawn (not yet sent) waypoints ---------------------------------
+      if (draft.length) {
+        ctx.strokeStyle = '#D946EF'; ctx.lineWidth = 2.5; ctx.setLineDash([7, 5]);
+        ctx.beginPath(); ctx.moveTo(sx(t.x), sy(t.y));
+        for (const [px, py] of draft) ctx.lineTo(sx(px), sy(py));
+        ctx.stroke(); ctx.setLineDash([]);
+        draft.forEach(([px, py], i) => {
+          ctx.fillStyle = '#D946EF';
+          ctx.beginPath(); ctx.arc(sx(px), sy(py), 8, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.font = 'bold 9px Inter, sans-serif'; ctx.textAlign = 'center';
+          ctx.fillText(String(i + 1), sx(px), sy(py) + 3); ctx.textAlign = 'left';
+        });
+      }
+
       // ---- vehicle --------------------------------------------------------
       const dx = sx(t.x); const dy = sy(t.y);
       ctx.save();
@@ -159,16 +259,32 @@ export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: 
       ctx.fillText(label, dx, by + 15);
       ctx.textAlign = 'left';
 
-      // scale bar
-      ctx.fillStyle = C.muted; ctx.font = '10px Inter, sans-serif';
-      ctx.fillText(`${stepM} m grid`, 10, h - 10);
+      // scale bar (+ where the imagery comes from)
+      ctx.font = '10px Inter, sans-serif';
+      const caption = `${stepM} m grid${showAerial ? ` · aerial: ${basemap.world} (Gazebo terrain)` : ''}`;
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillRect(6, h - 22, ctx.measureText(caption).width + 8, 16);
+      ctx.fillStyle = C.text;
+      ctx.fillText(caption, 10, h - 10);
     };
 
     draw();
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [t, waypoints, zoom]);
+  }, [t, waypoints, zoom, aerial, basemap, imgReady, draft]);
+
+  const pick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!drawing || e.target !== canvasRef.current) return;   // not on the buttons
+    const r = canvasRef.current.getBoundingClientRect();
+    const { cx, cy, scale, w, h } = viewRef.current;
+    const x = cx + (e.clientX - r.left - w / 2) / scale;
+    const y = cy - (e.clientY - r.top - h / 2) / scale;
+    setDraft((d) => [...d, [Math.round(x * 10) / 10, Math.round(y * 10) / 10]]);
+  };
+
+  const send = (fn: () => void) => { fn(); setDraft([]); };
+  const altOrNull = altText.trim() === '' ? null : Number(altText);
 
   return (
     <div className="bg-panelWhite rounded-lg shadow-sm border border-borderGray flex flex-col h-full overflow-hidden">
@@ -179,10 +295,72 @@ export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: 
 
       <div className="border-b border-borderGray shrink-0"><HudStrip t={t} /></div>
 
-      <div ref={wrapRef} className="flex-1 relative min-h-0">
+      <div ref={wrapRef} onClick={pick}
+           className={`flex-1 relative min-h-0 ${drawing ? 'cursor-crosshair' : ''}`}>
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
-        {waypoints.length === 0 && (
+        {/* waypoint drawing - everything sent is validated server-side like any step */}
+        {planner && (
+          <div className="absolute left-3 top-3 flex flex-col gap-1.5 items-start z-10">
+            <button onClick={() => { setDrawing((d) => !d); setDraft([]); }}
+                    title="Click the map to place waypoints"
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md shadow border text-xxs font-bold
+                      ${drawing ? 'bg-fuchsia-500 text-white border-fuchsia-600' : 'bg-panelWhite border-borderGray text-textMain'}`}>
+              <PenLine size={13} /> {drawing ? 'DRAWING' : 'DRAW WAYPOINTS'}
+            </button>
+            {drawing && (
+              <div className="bg-panelWhite/95 rounded-md shadow border border-borderGray p-2 flex flex-col gap-1.5 w-56">
+                <div className="text-xxs text-textMuted leading-snug">
+                  {draft.length === 0
+                    ? (planner.executing
+                      ? 'Click to add waypoints to the mission that is flying.'
+                      : 'Click the map to place waypoints.')
+                    : `${draft.length} point(s): ${draft.map(([x, y]) => `(${x.toFixed(0)}, ${y.toFixed(0)})`).join(' ')}`}
+                </div>
+                {!planner.executing && (
+                  <label className="flex items-center gap-1.5 text-xxs font-semibold">
+                    ALT
+                    <input value={altText} onChange={(e) => setAltText(e.target.value)}
+                           placeholder="current" inputMode="decimal"
+                           className="w-16 bg-bgMain border border-borderGray rounded px-1 py-0.5 outline-none" />
+                    m
+                  </label>
+                )}
+                <div className="flex flex-wrap gap-1">
+                  {planner.executing ? (<>
+                    <button disabled={!draft.length} onClick={() => send(() => planner.addWaypoints(draft, 'next'))}
+                            className="map-btn" title="Fly to these now, then continue the mission">
+                      <ListStart size={11} /> INSERT NEXT
+                    </button>
+                    <button disabled={!draft.length} onClick={() => send(() => planner.addWaypoints(draft, 'end'))}
+                            className="map-btn" title="Fly these after the mission's last leg">
+                      <ListEnd size={11} /> ADD AT END
+                    </button>
+                  </>) : (<>
+                    <button disabled={!draft.length} onClick={() => send(() => planner.flyPath(draft, false, altOrNull))}
+                            className="map-btn" title="Fly through the points once">
+                      <Play size={11} /> FLY PATH
+                    </button>
+                    <button disabled={draft.length < 2} onClick={() => send(() => planner.flyPath(draft, true, altOrNull))}
+                            className="map-btn" title="Fly the points and close the loop">
+                      <Repeat size={11} /> FLY CIRCUIT
+                    </button>
+                  </>)}
+                  <button disabled={!draft.length} onClick={() => setDraft((d) => d.slice(0, -1))}
+                          className="map-btn" title="Remove the last point">
+                    <Undo2 size={11} />
+                  </button>
+                  <button disabled={!draft.length} onClick={() => setDraft([])}
+                          className="map-btn" title="Clear the drawn points">
+                    <Trash2 size={11} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {waypoints.length === 0 && !drawing && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <span className="text-textMuted text-xs bg-panelWhite/80 px-3 py-1.5 rounded">
               No mission loaded — send a command below
@@ -190,8 +368,13 @@ export default function MissionMap({ t, waypoints }: { t: Telemetry; waypoints: 
           </div>
         )}
 
-        <button className="absolute right-3 top-3 bg-panelWhite rounded-md p-2 shadow border border-borderGray">
-          <Layers size={18} className="text-textMain" />
+        <button onClick={() => setAerial((a) => !a)} disabled={!basemap}
+                title={basemap ? (aerial ? 'Hide aerial map' : 'Show aerial map')
+                  : 'No aerial map for this world'}
+                className={`absolute right-3 top-3 rounded-md p-2 shadow border
+                  ${basemap && aerial ? 'bg-aeroCyan/15 border-aeroCyan' : 'bg-panelWhite border-borderGray'}
+                  disabled:opacity-40`}>
+          <Layers size={18} className={basemap && aerial ? 'text-aeroCyan' : 'text-textMain'} />
         </button>
 
         {/* left zoom rail */}

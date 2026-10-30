@@ -43,3 +43,18 @@ runs/
 # ---- Separate workspaces that sometimes sit alongside this one ----
 ws_swarm/
 ws_offboard_control/
+
+# ---- aero_gcs basemap cache (generated from local Gazebo models) ----
+aero_gcs/backend_services/cache/
+
+# ---- real flight logs (large, private) - keep only the README ----
+realFlight_logs/*
+!realFlight_logs/README.md
+
+# ---- worlds generated from real locations (rebuild with world_builder.py) ----
+aero_gcs/sim_worlds/
+
+# ---- runtime service logs (new ones; the few already tracked stay tracked) ----
+aero_gcs/backend_services/logs/*.prev
+aero_gcs/backend_services/logs/gui.log
+aero_gcs/backend_services/logs/session.log

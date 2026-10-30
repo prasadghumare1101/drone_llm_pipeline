@@ -17,6 +17,7 @@ Design rules:
 from __future__ import annotations
 
 import hashlib
+import math
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -163,8 +164,23 @@ MissionCommand = Union[TakeoffCmd, GotoCmd, LoopCmd, HoldCmd, LandCmd, RtlCmd,
 
 
 @dataclass(frozen=True)
+class VehiclePose:
+    """Live vehicle snapshot an interactive step is planned from.
+
+    LOCAL_ENU_METERS like everything else; heading_deg is a compass heading
+    (0 = North, 90 = East, clockwise), the convention PX4 reports.
+    """
+    x: float
+    y: float
+    alt: float
+    heading_deg: float = 0.0
+    in_air: bool = False
+
+
+@dataclass(frozen=True)
 class MissionPlan:
-    """Frozen validated mission. Instances are only created by validate_mission()."""
+    """Frozen validated mission. Instances are only created by validate_mission()
+    or validate_step()."""
     schema_version: str
     mission_name: str
     vehicle: str
@@ -172,6 +188,8 @@ class MissionPlan:
     cruise_speed_mps: float
     commands: Tuple[MissionCommand, ...]
     source_sha256: str  # hash of the canonicalised source JSON (traceability)
+    # Set only for interactive steps: the pose MOVE commands were resolved from.
+    start_pose: Optional[VehiclePose] = None
 
 
 class MissionValidationError(ValueError):
@@ -247,10 +265,89 @@ def _check_speed(spd: Optional[float], lim: SafetyLimits, where: str,
         errors.append(f"{where}: speed_mps {spd} exceeds max {lim.max_speed_mps} m/s")
 
 
-def _semantic_errors(data: Dict[str, Any]) -> List[str]:
+def _pattern_end(cmd: Dict[str, Any]) -> Tuple[float, float]:
+    """Where a GRID / ORBIT / SPIRAL leaves the vehicle (mirrors the executor's
+    expansion), so a MOVE that follows a pattern resolves from the right place."""
+    t = cmd["type"]
+    if t == "GRID":
+        g = GridCmd(cmd["center_x"], cmd["center_y"], cmd["width"], cmd["height"],
+                    max(cmd["spacing"], 1e-6), cmd["alt"])
+        last = g.lanes - 1
+        oy = -cmd["height"] / 2.0 + min(last * g.spacing, cmd["height"])
+        ox = -cmd["width"] / 2.0 if last % 2 else cmd["width"] / 2.0
+        th = math.radians(cmd.get("heading_deg", 0.0))
+        return (cmd["center_x"] + ox * math.cos(th) - oy * math.sin(th),
+                cmd["center_y"] + ox * math.sin(th) + oy * math.cos(th))
+    if t == "ORBIT":
+        return cmd["x"] + cmd["radius"], cmd["y"]
+    # SPIRAL ends after a whole number of turns, i.e. back on the +x axis
+    return cmd["x"] + cmd["start_radius"] + cmd["growth"] * cmd["turns"], cmd["y"]
+
+
+def _resolve_moves(data: Dict[str, Any],
+                   pose: Optional[VehiclePose]) -> Tuple[Dict[str, Any], List[str]]:
+    """Replace every relative MOVE with the absolute GOTO it lands on.
+
+    Resolution happens HERE, at the trust boundary, so the model never does
+    the trigonometry and the resolved targets go through exactly the same
+    altitude/geofence checks as any GOTO. Body axes use the heading at the
+    start of the step (interactive mode holds heading constant).
+    """
+    cmds = data["commands"]
+    if not any(c["type"] == "MOVE" for c in cmds):
+        return data, []
+    if pose is None:
+        return data, ["$.commands: MOVE is relative to the live vehicle pose and is "
+                      "only valid in interactive steps"]
+
+    errors: List[str] = []
+    h = math.radians(pose.heading_deg)
+    x, y, alt = pose.x, pose.y, pose.alt
+    out: List[Dict[str, Any]] = []
+    for i, c in enumerate(cmds):
+        t = c["type"]
+        if t == "MOVE":
+            body = "forward" in c or "right" in c
+            world = "north" in c or "east" in c
+            if body and world:
+                errors.append(f"$.commands[{i}] (MOVE): mixes body (forward/right) and "
+                              "world (north/east) axes; use two MOVEs")
+            fwd, right = c.get("forward", 0.0), c.get("right", 0.0)
+            east = c.get("east", 0.0) + fwd * math.sin(h) + right * math.cos(h)
+            north = c.get("north", 0.0) + fwd * math.cos(h) - right * math.sin(h)
+            if east == north == c.get("up", 0.0) == 0.0:
+                errors.append(f"$.commands[{i}] (MOVE): zero-length move")
+            x, y, alt = round(x + east, 3), round(y + north, 3), round(alt + c.get("up", 0.0), 3)
+            goto = {"type": "GOTO", "x": x, "y": y, "alt": alt}
+            if "speed_mps" in c:
+                goto["speed_mps"] = c["speed_mps"]
+            out.append(goto)
+            continue
+        if t == "TAKEOFF":
+            alt = c["alt"]
+        elif t == "GOTO":
+            x, y, alt = c["x"], c["y"], c["alt"]
+        elif t == "LOOP":
+            last = c["waypoints"][-1]
+            x, y, alt = last["x"], last["y"], last["alt"]
+        elif t in ("GRID", "ORBIT", "SPIRAL"):
+            (x, y), alt = _pattern_end(c), c["alt"]
+        elif t == "LAND":
+            alt = 0.0
+        elif t == "RTL":
+            x, y, alt = 0.0, 0.0, 0.0
+        out.append(c)
+    return {**data, "commands": out}, errors
+
+
+def _semantic_errors(data: Dict[str, Any],
+                     step_in_air: Optional[bool] = None,
+                     limits: Optional[SafetyLimits] = None) -> List[str]:
+    """step_in_air is None for a one-shot mission; for an interactive step it
+    says whether the vehicle is already flying, which changes the shape rules."""
     errors: List[str] = []
     vehicle = data["vehicle"]
-    lim = LIMITS_BY_VEHICLE[vehicle]
+    lim = limits if limits is not None and vehicle == "drone" else LIMITS_BY_VEHICLE[vehicle]
     total_caps = 0
 
     if data["cruise_speed_mps"] > lim.max_speed_mps:
@@ -375,7 +472,24 @@ def _semantic_errors(data: Dict[str, Any]) -> List[str]:
     PAYLOAD = {"CAPTURE", "RECORD", "GIMBAL"}
     types = [c["type"] for c in cmds]
     flight = [t for t in types if t not in PAYLOAD]
-    if vehicle == "drone":
+    if step_in_air is not None:
+        # Interactive step: starts wherever the vehicle is and normally ends in
+        # a hover, so neither a TAKEOFF nor a LAND/RTL is mandatory.
+        if vehicle != "drone":
+            errors.append("$.vehicle: interactive steps are drone-only")
+        elif step_in_air and "TAKEOFF" in flight:
+            errors.append("$.commands: vehicle is already airborne - TAKEOFF not "
+                          "allowed (use MOVE or GOTO to change altitude)")
+        elif not step_in_air and (not flight or flight[0] != "TAKEOFF"):
+            errors.append("$.commands[0]: vehicle is on the ground - the step must "
+                          "start with TAKEOFF")
+        if flight.count("TAKEOFF") > 1:
+            errors.append("$.commands: at most one TAKEOFF per step")
+        for t in flight[:-1]:
+            if t in ("LAND", "RTL"):
+                errors.append(f"$.commands: {t} only permitted as the final "
+                              "flight command")
+    elif vehicle == "drone":
         if not flight:
             errors.append("$.commands: mission contains no flight commands")
         else:
@@ -397,7 +511,8 @@ def _semantic_errors(data: Dict[str, Any]) -> List[str]:
 # Structuring (dict -> frozen dataclasses); only reached when fully valid
 # --------------------------------------------------------------------------- #
 
-def _to_plan(data: Dict[str, Any]) -> MissionPlan:
+def _to_plan(data: Dict[str, Any],
+             start_pose: Optional[VehiclePose] = None) -> MissionPlan:
     cmds: List[MissionCommand] = []
     for c in data["commands"]:
         t = c["type"]
@@ -456,7 +571,11 @@ def _to_plan(data: Dict[str, Any]) -> MissionPlan:
         frame=data["frame"],
         cruise_speed_mps=float(data["cruise_speed_mps"]),
         commands=tuple(cmds),
-        source_sha256=_canonical_sha256(data),
+        source_sha256=_canonical_sha256(
+            data if start_pose is None
+            else {"step": data, "pose": [start_pose.x, start_pose.y, start_pose.alt,
+                                         start_pose.heading_deg, start_pose.in_air]}),
+        start_pose=start_pose,
     )
 
 
@@ -464,9 +583,7 @@ def _to_plan(data: Dict[str, Any]) -> MissionPlan:
 # Public API
 # --------------------------------------------------------------------------- #
 
-def validate_mission(raw: Union[str, bytes, Dict[str, Any]]) -> MissionPlan:
-    """Validate untrusted mission JSON. Returns MissionPlan or raises
-    MissionValidationError listing every specific problem found."""
+def _parse(raw: Union[str, bytes, Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(raw, (str, bytes)):
         try:
             data = json.loads(raw)
@@ -492,12 +609,48 @@ def validate_mission(raw: Union[str, bytes, Dict[str, Any]]) -> MissionPlan:
     errors = _schema_errors(data)
     if errors:  # semantic checks assume schema-valid shape
         raise MissionValidationError(errors, stage="schema")
+    return data
+
+
+def validate_mission(raw: Union[str, bytes, Dict[str, Any]]) -> MissionPlan:
+    """Validate untrusted mission JSON. Returns MissionPlan or raises
+    MissionValidationError listing every specific problem found."""
+    data = _parse(raw)
+    _, errors = _resolve_moves(data, None)
+    if errors:      # MOVE in a one-shot mission: re-asking the model can fix it
+        raise MissionValidationError(errors, stage="schema")
 
     errors = _semantic_errors(data)
     if errors:
         raise MissionValidationError(errors, stage="safety")
 
     return _to_plan(data)
+
+
+def validate_step(raw: Union[str, bytes, Dict[str, Any]],
+                  pose: VehiclePose,
+                  limits: Optional[SafetyLimits] = None) -> MissionPlan:
+    """Validate one interactive step, planned from the live `pose`.
+
+    Same schema, limits and geofence as validate_mission(), but relative MOVEs
+    are resolved against `pose` first and the mission-shape rules follow the
+    vehicle's state (see _semantic_errors). The returned plan contains only
+    absolute commands and records the pose it was resolved from. `limits`
+    replaces the drone limits for a site with its own geofence
+    (safety_limits.drone_limits_for_site).
+    """
+    if not isinstance(pose, VehiclePose):
+        raise TypeError("validate_step() needs a VehiclePose snapshot")
+    data = _parse(raw)
+    resolved, errors = _resolve_moves(data, pose)
+    if errors:
+        raise MissionValidationError(errors, stage="safety")
+
+    errors = _semantic_errors(resolved, step_in_air=pose.in_air, limits=limits)
+    if errors:
+        raise MissionValidationError(errors, stage="safety")
+
+    return _to_plan(resolved, start_pose=pose)
 
 
 def validate_mission_file(path: Union[str, Path]) -> MissionPlan:

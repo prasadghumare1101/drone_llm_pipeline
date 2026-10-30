@@ -15,10 +15,10 @@ from .commands import (
     command_to_dict,
     commands_digest,
 )
-from .mission_executor import compile_mission, expand_grid, expand_orbit, expand_spiral
+from .mission_executor import compile_mission, compile_step, expand_grid, expand_orbit, expand_spiral
 
 __all__ = [
-    "compile_mission", "commands_digest", "command_to_dict",
+    "compile_mission", "compile_step", "commands_digest", "command_to_dict",
     "expand_grid", "expand_orbit", "expand_spiral",
     "ExecutableCommand", "EXECUTABLE_TYPES",
     "Arm", "Disarm", "Takeoff", "Goto", "Hold", "Land", "ReturnToLaunch",

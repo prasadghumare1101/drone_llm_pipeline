@@ -16,11 +16,11 @@ from llm_layer.llm_client import (
     _Truncated,
 )
 
-TOKEN_VARS = ("HF_TOKEN", "HUGGINGFACE_API_KEY", "HF_API_TOKEN")
+TOKEN_VARS = ("HF_TOKEN", "HUGGINGFACE_API_KEY", "HF_API_TOKEN", "GROQ_API_KEY")
 
 
 def _clear_env(monkeypatch):
-    for var in TOKEN_VARS + ("HF_MODEL",):
+    for var in TOKEN_VARS + ("HF_MODEL", "GROQ_MODEL"):
         monkeypatch.delenv(var, raising=False)
 
 

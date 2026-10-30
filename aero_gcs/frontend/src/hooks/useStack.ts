@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_BASE } from './useLLM';
 
-/** The five processes that used to be five terminals. */
-export type ServiceName = 'agent' | 'sitl' | 'rosbridge' | 'video' | 'telemetry';
+/** The processes that used to be separate terminals. */
+export type ServiceName = 'agent' | 'sitl' | 'gui' | 'rosbridge' | 'video' | 'telemetry';
 
 export interface ServiceState {
   name: ServiceName;
@@ -15,12 +15,13 @@ export interface ServiceState {
 const LABELS: Record<ServiceName, string> = {
   agent: 'uXRCE-DDS Agent',
   sitl: 'PX4 SITL + Gazebo',
+  gui: 'Gazebo Window',
   rosbridge: 'ROS Bridge (:9090)',
   video: 'Video Streamer (:8080)',
   telemetry: 'Telemetry Node',
 };
 
-const ORDER: ServiceName[] = ['agent', 'sitl', 'rosbridge', 'telemetry', 'video'];
+const ORDER: ServiceName[] = ['agent', 'sitl', 'gui', 'rosbridge', 'telemetry', 'video'];
 
 /** Start/stop the whole simulation stack from the dashboard. */
 export const useStack = () => {

@@ -4,16 +4,49 @@ import TelemetryLeft from './components/TelemetryLeft';
 import MissionMap from './components/MissionMap';
 import MissionRight from './components/MissionRight';
 import CommsRight from './components/CommsRight';
-import { useROS } from './hooks/useROS';
+import { useROS, type Telemetry } from './hooks/useROS';
 import { useLLM } from './hooks/useLLM';
+import { useSession } from './hooks/useSession';
+
+const PHASE_STATUS: Record<string, string> = {
+  ON_GROUND: 'INTERACTIVE SESSION - ON GROUND',
+  PLANNING: 'LLM PLANNING NEXT STEP…',
+  AWAITING_ARM: 'STEP VALIDATED - WAITING FOR PILOT TO ARM',
+  EXECUTING: 'EXECUTING VALIDATED STEP',
+  HOVERING: 'STEP DONE - HOVERING, AWAITING NEXT ORDER',
+  RETURNING: 'RETURNING HOME',
+  LANDING: 'LANDING',
+  RC_OVERRIDE: 'RC OVERRIDE - PILOT HAS CONTROL',
+  FAULT: 'VEHICLE FAULT - AI STOPPED',
+};
 
 export default function App() {
-  const { connected, telemetry } = useROS();
-  const { llmStatus, waypoints, running, log, sendCommand, abortMission } = useLLM();
+  const ros = useROS();
+  const { llmStatus, waypoints, running, log, abortMission } = useLLM();
+  const session = useSession();
+
+  // An active interactive session owns the mission panel and the map.
+  const live = session.active;
+  const shownWaypoints = live ? session.waypoints : waypoints;
+  const status = live && session.phase
+    ? `${PHASE_STATUS[session.phase]}${session.stepText ? `: "${session.stepText}"` : ''}`
+    : llmStatus;
+  const stepRunning = live ? session.phase === 'EXECUTING' : running;
+
+  // The kinematic sim has no ROS telemetry; show the session's vehicle instead.
+  const v = session.vehicle;
+  const connected = ros.connected;
+  const telemetry: Telemetry = !connected && live && v ? {
+    ...ros.telemetry,
+    altitude: v.alt, heading: v.heading_deg, x: v.x, y: v.y,
+    battery: v.battery_pct ?? 0, armed: v.armed,
+    flight_mode: `${v.mode}${v.armed ? '' : ' (DISARMED)'} [SIM]`,
+  } : ros.telemetry;
 
   return (
     <div className="h-screen w-screen bg-bgMain text-textMain font-sans flex flex-col overflow-hidden">
-      <TopBar connected={connected} telemetry={telemetry} />
+      <TopBar connected={connected} telemetry={telemetry}
+              onReplay={live ? (points, alt) => session.flyPath(points, false, alt) : undefined} />
 
       <div className="px-3 pt-1 shrink-0 text-right">
         <span className="text-xxs font-semibold tracking-widest text-textMuted">
@@ -46,7 +79,12 @@ export default function App() {
           {/* CENTER: mission map */}
           <div className="min-h-0 min-w-0 h-full
                           md:col-span-2 md:row-start-2 xl:col-span-6 xl:row-start-1">
-            <MissionMap t={telemetry} waypoints={waypoints} />
+            <MissionMap t={telemetry} waypoints={shownWaypoints}
+                        planner={live ? {
+                          executing: session.phase === 'EXECUTING',
+                          flyPath: session.flyPath,
+                          addWaypoints: session.addWaypoints,
+                        } : undefined} />
           </div>
 
           {/* RIGHT: mission automation above communications */}
@@ -54,11 +92,11 @@ export default function App() {
                           grid-rows-[minmax(0,1fr)_minmax(0,1fr)]
                           md:row-start-1 md:col-start-2 xl:col-span-3 xl:row-start-1">
             <div className="min-h-0 min-w-0">
-              <MissionRight status={llmStatus} waypoints={waypoints}
-                            running={running} onAbort={abortMission} />
+              <MissionRight status={status} waypoints={shownWaypoints} running={stepRunning}
+                            onAbort={live ? () => session.quick('hold') : abortMission} />
             </div>
             <div className="min-h-0 min-w-0">
-              <CommsRight onSend={sendCommand} running={running} log={log} />
+              <CommsRight session={session} log={log} />
             </div>
           </div>
 

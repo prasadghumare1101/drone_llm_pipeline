@@ -45,9 +45,9 @@ def main(argv=None) -> int:
                     choices=["sim", "px4", "mavsdk", "nav2"],
                     help="execution backend (default: sim = built-in kinematic simulator)")
     ap.add_argument("--llm", default="auto",
-                    choices=["auto", "huggingface", "offline"],
-                    help="LLM backend (auto: Hugging Face if HF_TOKEN set, "
-                         "else the deterministic offline parser)")
+                    choices=["auto", "groq", "huggingface", "offline"],
+                    help="LLM backend (auto: Groq if GROQ_API_KEY set, else Hugging "
+                         "Face if HF_TOKEN set, else the deterministic offline parser)")
     ap.add_argument("--out-dir", default=None,
                     help="artifact directory (default: runs/<UTC timestamp>)")
     ap.add_argument("--dry-run", action="store_true",

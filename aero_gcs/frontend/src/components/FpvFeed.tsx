@@ -16,6 +16,8 @@ export default function FpvFeed({ t }: { t: Telemetry }) {
   // Bumped on each retry to bust the cached failed request. Without this the
   // panel would stay dead until a page refresh if the streamer starts late.
   const [attempt, setAttempt] = useState(0);
+  // front = forward FPV camera, down = downward camera (surveys, landing spots)
+  const [cam, setCam] = useState<'front' | 'down'>('front');
 
   useEffect(() => {
     if (alive) return;
@@ -27,7 +29,17 @@ export default function FpvFeed({ t }: { t: Telemetry }) {
     <div className="bg-panelWhite rounded-lg shadow-sm border border-borderGray flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b border-borderGray shrink-0">
         <span className="text-sm font-semibold tracking-wide">FPV FEED</span>
-        <MoreHorizontal size={16} className="text-textMuted" />
+        <div className="flex items-center gap-1">
+          {(['front', 'down'] as const).map((c) => (
+            <button key={c} onClick={() => { setCam(c); setAttempt((a) => a + 1); setAlive(true); }}
+                    title={c === 'front' ? 'Forward camera' : 'Downward camera (looks straight down)'}
+                    className={`px-2 py-0.5 rounded text-xxs font-bold
+                      ${cam === c ? 'bg-aeroCyan text-white' : 'bg-bgMain text-textMuted hover:bg-borderGray'}`}>
+              {c === 'front' ? 'FRONT' : 'DOWN'}
+            </button>
+          ))}
+          <MoreHorizontal size={16} className="text-textMuted ml-1" />
+        </div>
       </div>
 
       <HudStrip t={t} compact />
@@ -36,8 +48,8 @@ export default function FpvFeed({ t }: { t: Telemetry }) {
         {alive ? (
           <img
             key={attempt}
-            src={attempt ? `${VIDEO_URL}?r=${attempt}` : VIDEO_URL}
-            alt="FPV feed"
+            src={`${VIDEO_URL}?cam=${cam}${attempt ? `&r=${attempt}` : ''}`}
+            alt={cam === 'down' ? 'Downward camera' : 'FPV feed'}
             className="w-full h-full object-cover"
             style={{ transform: `scale(${1 + zoom / 100})` }}
             onError={() => setAlive(false)}

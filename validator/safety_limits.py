@@ -11,7 +11,7 @@ All units: metres, metres/second, seconds.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import FrozenSet, Mapping
 
 
@@ -48,6 +48,7 @@ DRONE_LIMITS = SafetyLimits(
     allowed_commands=frozenset({
         "TAKEOFF", "GOTO", "LOOP", "HOLD", "LAND", "RTL",
         "GRID", "ORBIT", "SPIRAL", "CAPTURE", "RECORD", "GIMBAL",
+        "MOVE",             # interactive steps only (see validate_step)
     }),
 )
 
@@ -66,3 +67,21 @@ LIMITS_BY_VEHICLE: Mapping[str, SafetyLimits] = {
     "drone": DRONE_LIMITS,
     "ground_robot": GROUND_ROBOT_LIMITS,
 }
+
+
+# Hard upper bound for a site override: a typo in a config file must not turn
+# the geofence into "anywhere".
+MAX_SITE_GEOFENCE_M = 10_000.0
+
+
+def drone_limits_for_site(geofence_half_side_m: float) -> SafetyLimits:
+    """DRONE_LIMITS with a site-specific geofence (and orbit/spiral radius cap).
+
+    The default 200 m square is sized for a small field. A larger, surveyed
+    site (e.g. the 5.7 km McMillan airfield world) can widen it; everything
+    else - altitude, speed, waypoint and capture budgets - stays as is.
+    """
+    g = float(geofence_half_side_m)
+    if not 0 < g <= MAX_SITE_GEOFENCE_M:
+        raise ValueError(f"site geofence must be in (0, {MAX_SITE_GEOFENCE_M:g}] m, got {g}")
+    return replace(DRONE_LIMITS, geofence_half_side_m=g, max_orbit_radius_m=g)
