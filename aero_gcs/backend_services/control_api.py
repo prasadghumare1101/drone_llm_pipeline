@@ -22,6 +22,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -41,10 +42,28 @@ from pydantic import BaseModel
 # --------------------------------------------------------------------------- #
 
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]      # ~/drone_llm_pipeline
+# Linux gives us /proc (process environments) and `ss`; macOS does not. The few
+# features that need them have a fallback or are Linux-only (see GUI service).
+LINUX = Path("/proc/self/environ").exists()
+
+
+def _load_key_files() -> None:
+    """LLM keys (GROQ_API_KEY, HF_TOKEN, ...) from ~/.config/drone_llm/*.env, so
+    the API needs no special launch command. Never overrides the environment."""
+    d = Path.home() / ".config" / "drone_llm"
+    for f in sorted(d.glob("*.env")) if d.is_dir() else []:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            k, sep, v = line.strip().partition("=")
+            if sep and k and not k.startswith("#"):
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+_load_key_files()
 SERVICES_DIR = Path(__file__).resolve().parent
 PX4_DIR = Path(os.environ.get("PX4_DIR", Path.home() / "PX4-Autopilot"))
 ROS_SETUP = os.environ.get("ROS_SETUP", "/opt/ros/humble/setup.bash")
-WS_SETUP = PIPELINE_ROOT / "install" / "setup.bash"
+# colcon workspace with px4_msgs (built from YOUR PX4 checkout's msg/ folder)
+WS_SETUP = Path(os.environ.get("AERO_WS_SETUP", PIPELINE_ROOT / "install" / "setup.bash"))
 
 # PX4 gazebo-classic default home (Zurich). Override with PX4_HOME_LAT/LON.
 HOME_LAT = float(os.environ.get("PX4_HOME_LAT", 47.397742))
@@ -87,10 +106,26 @@ SITL_ENV: Dict[str, str] = {
     # at normal priority, and _gui_watchdog() restarts it if it ever freezes.
     "HEADLESS": "1",
 }
+if not LINUX:
+    # the managed window copies gzserver's environment from /proc; elsewhere
+    # PX4's own launcher opens the Gazebo window as usual
+    SITL_ENV.pop("HEADLESS")
 
 # Hard ceiling on any captured service log. Defence in depth for the runaway
 # case above - a log can never be allowed to consume the disk.
 MAX_LOG_BYTES = 20 * 1024 * 1024
+
+# PX4 SITL parameters the project depends on. Applied by code at every START SIM
+# so every machine's sim behaves the same (they used to be set by hand once).
+SITL_PARAMS = {
+    "COM_RCL_EXCEPT": 4,      # SITL has no RC: don't treat that as RC loss in OFFBOARD
+    "SYS_FAILURE_EN": 1,      # allow the dashboard's FAULTS panel
+    "SIM_BAT_DRAIN": 2400,    # realistic battery: 100 -> 0 % in 40 min (2.5 %/min) ...
+    "SIM_BAT_MIN_PCT": 0,     # ... draining continuously, like a real pack
+    "SDLOG_MODE": 0,          # log only while armed (default logs from boot)
+    "SDLOG_PROFILE": 1,       # default topics; SITL's high-rate profile wrote ~1 GB/h
+    "SDLOG_DIRS_MAX": 3,      # keep 3 days of sim logs
+}
 
 # Heavy worlds need far longer than `empty` before the DDS link appears.
 SITL_READY_TIMEOUT_S = float(os.environ.get("PX4_READY_TIMEOUT", 180))
@@ -174,14 +209,21 @@ class Service:
             self.log_path.replace(self.log_path.with_suffix(".log.prev"))
         self._log_fh = self.log_path.open("w", buffering=1, encoding="utf-8",
                                           errors="replace")
-        self.proc = subprocess.Popen(
-            self.argv,
-            cwd=str(self.cwd),
-            env=merged,
-            stdout=self._log_fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,      # own process group -> killable as a tree
-        )
+        try:
+            self.proc = subprocess.Popen(
+                self.argv,
+                cwd=str(self.cwd),
+                env=merged,
+                stdout=self._log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,      # own process group -> killable as a tree
+            )
+        except (FileNotFoundError, NotADirectoryError) as e:
+            self._log_fh.write(f"[control_api] cannot start {self.name}: {e}\n")
+            self._log_fh.close()
+            self._log_fh, self.proc = None, None
+            if "not installed" not in self.detail:
+                self.detail += f" (not installed: {self.argv[0]})"
 
     def tail(self, lines: int = 40) -> str:
         if not self.log_path or not self.log_path.is_file():
@@ -244,6 +286,9 @@ SERVICES: Dict[str, Service] = {
 
 # Order matters: agent before SITL so the DDS link comes up cleanly.
 START_ORDER = ["agent", "sitl", "gui", "rosbridge", "telemetry", "video"]
+if not LINUX:
+    START_ORDER.remove("gui")
+    SERVICES["gui"].detail = "Gazebo window (opened by PX4 on this OS)"
 
 
 # --------------------------------------------------------------------------- #
@@ -576,6 +621,26 @@ def _apply_sim_config() -> None:
     SERVICES["sitl"].detail = f"{SIM_CONFIG['model']} / {SIM_CONFIG['world']}"
 
 
+def _apply_sitl_params(timeout_s: float = 30.0) -> str:
+    exe = PX4_DIR / "build" / "px4_sitl_default" / "bin" / "px4-param"
+    if not exe.is_file():
+        return " | params: px4-param not found"
+    pending = dict(SITL_PARAMS)
+    deadline = time.monotonic() + timeout_s
+    while pending and time.monotonic() < deadline:     # PX4 may still be booting
+        for k, v in list(pending.items()):
+            try:
+                r = subprocess.run([str(exe), "set", k, str(v)], cwd=str(exe.parent.parent),
+                                   capture_output=True, text=True, timeout=5)
+            except subprocess.SubprocessError:
+                continue
+            if r.returncode == 0:
+                pending.pop(k)
+        if pending:
+            time.sleep(1.0)
+    return " | params ok" if not pending else f" | params NOT set: {', '.join(pending)}"
+
+
 def _wait_for_sitl(timeout_s: float) -> bool:
     """Block until Gazebo has actually finished loading the world.
 
@@ -688,7 +753,7 @@ def set_sim_config(model: Optional[str] = None,
 # Gazebo window (gzclient): normal priority + self-healing
 # --------------------------------------------------------------------------- #
 
-GUI_STATE = {"wanted": False, "misses": 0, "started": 0.0, "restarts": 0}
+GUI_STATE = {"wanted": False, "misses": 0, "started": 0.0, "restarts": 0, "server_seen": False}
 GUI_CHECK_S = 5.0
 GUI_GRACE_S = 20.0           # a fresh window needs a moment to reach the master
 GUI_MAX_MISSES = 3           # ~15 s without a master connection = frozen
@@ -720,11 +785,7 @@ def _prepare_gui() -> bool:
 
 
 def _master_listening() -> bool:
-    try:
-        out = subprocess.run(["ss", "-ltn"], capture_output=True, text=True, timeout=5).stdout
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return True
-    return ":11345 " in out
+    return _port_owner(11345) is not None or not _can_inspect_ports()
 
 
 def _start_gui(wait_s: float = 30.0) -> None:
@@ -759,7 +820,9 @@ def _gui_watchdog() -> None:
         gui = SERVICES["gui"]
         sitl = SERVICES["sitl"]
         server_up = _pid_of("gzserver") is not None
-        if sitl.running and not server_up and time.monotonic() - GUI_STATE["started"] > 60:
+        GUI_STATE["server_seen"] = GUI_STATE["server_seen"] or server_up
+        # only a server that WAS up and is now gone is a crash (not a slow start)
+        if sitl.running and not server_up and GUI_STATE["server_seen"]:
             # PX4 is still up waiting for a simulator that died: say so, loudly
             if "CRASHED" not in sitl.detail:
                 sitl.detail += " - Gazebo server CRASHED: STOP SIM, then START SIM"
@@ -940,7 +1003,7 @@ def stack_start() -> dict:
     _apply_sim_config()
     SERVICES["sitl"].detail += f" | env: {_apply_environment()}"
     time.sleep(1.0)
-    GUI_STATE.update(wanted=True, restarts=0)
+    GUI_STATE.update(wanted=LINUX, restarts=0, server_seen=False)
     ACTIVE_FAULTS.clear()
     SERVICES["gui"].detail = "Gazebo window"
     for name in START_ORDER:
@@ -952,7 +1015,8 @@ def stack_start() -> dict:
         if name == "sitl":
             # Wait for the world to finish loading rather than guessing. This is
             # what makes heavy worlds work without racing the DDS link.
-            _wait_for_sitl(SITL_READY_TIMEOUT_S)
+            if _wait_for_sitl(SITL_READY_TIMEOUT_S):
+                SERVICES["sitl"].detail += _apply_sitl_params()
         else:
             time.sleep(2.0 if name == "agent" else 1.0)
     return stack_status()
@@ -1099,7 +1163,8 @@ def session_start(backend: str = "px4", llm: Optional[str] = None) -> dict:
     if backend == "px4" and not SERVICES["sitl"].running:
         return {"ok": False, "detail": "start the simulation first (START SIM)"}
     llm = llm or os.environ.get("AERO_LLM", "auto")
-    cmd = (f"python3 {SERVICES_DIR / 'session_service.py'} --backend {backend} "
+    py = "python3" if backend == "px4" else sys.executable   # px4: ROS-sourced python
+    cmd = (f"{py} {SERVICES_DIR / 'session_service.py'} --backend {backend} "
            f"--llm {llm} --port {SESSION_PORT}")
     site = _basemap_entry(SIM_CONFIG["world"]) or {}
     fence = site.get("geofence_half_side_m")
@@ -1339,18 +1404,27 @@ def flightlogs_report(flight: str) -> dict:
     return {"ok": True, "flight": _safe(flight), "report": json.loads(f.read_text(encoding="utf-8"))}
 
 
+def _can_inspect_ports() -> bool:
+    return bool(shutil.which("ss") or shutil.which("lsof"))
+
+
 def _port_owner(port: int) -> Optional[int]:
-    """PID currently listening on `port`, if any."""
+    """PID currently listening on `port`, if any (`ss` on Linux, `lsof` on macOS)."""
     try:
-        out = subprocess.run(["ss", "-ltnp"], capture_output=True,
-                             text=True, timeout=5).stdout
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return None
-    for line in out.splitlines():
-        if f":{port} " in line:
-            m = re.search(r"pid=(\d+)", line)
-            if m:
-                return int(m.group(1))
+        if shutil.which("ss"):
+            out = subprocess.run(["ss", "-ltnp"], capture_output=True, text=True, timeout=5).stdout
+            for line in out.splitlines():
+                if f":{port} " in line:
+                    m = re.search(r"pid=(\d+)", line)
+                    if m:
+                        return int(m.group(1))
+            return None
+        if shutil.which("lsof"):
+            out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                                 capture_output=True, text=True, timeout=5).stdout.split()
+            return int(out[0]) if out else None
+    except (subprocess.SubprocessError, ValueError):
+        pass
     return None
 
 

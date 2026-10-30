@@ -126,6 +126,47 @@ docker run --rm drone-llm-pipeline \
 
 <br>
 
+## Running on another machine (Linux or macOS)
+
+Prerequisites already installed on the machine: PX4-Autopilot (SITL builds),
+ROS 2 Humble, Gazebo Classic, MicroXRCE-DDS Agent, and a colcon workspace with
+`px4_msgs` built **from that machine's PX4 checkout** (`PX4-Autopilot/msg/*.msg` and
+`msg/versioned/*.msg`) - a mismatched `px4_msgs` silently breaks status/arming feedback.
+
+```bash
+git clone https://github.com/prasadghumare1101/drone_llm_pipeline.git && cd drone_llm_pipeline
+python3 -m venv .venv && source .venv/bin/activate      # Python 3.10+
+pip install -r requirements.txt
+(cd aero_gcs/frontend && npm ci)
+
+# LLM key(s), loaded automatically by the control API (never commit them)
+mkdir -p ~/.config/drone_llm && echo 'GROQ_API_KEY=gsk_...' > ~/.config/drone_llm/keys.env
+
+python3 aero_gcs/backend_services/control_api.py         # terminal 1 (:8000)
+(cd aero_gcs/frontend && npm run dev)                    # terminal 2 -> open the URL it prints
+```
+
+Paths, if not the defaults:
+
+| Variable | Default | Meaning |
+|:--|:--|:--|
+| `PX4_DIR` | `~/PX4-Autopilot` | PX4 checkout (SITL is built and launched from here) |
+| `ROS_SETUP` | `/opt/ros/humble/setup.bash` | ROS 2 environment |
+| `AERO_WS_SETUP` | `<repo>/install/setup.bash` | colcon workspace containing `px4_msgs` |
+| `PX4_WORLD` | `empty` | Gazebo world selected at start-up |
+| `AERO_LLM` | `auto` | `groq`, `huggingface`, `offline` or `auto` (first key found) |
+| `VITE_AERO_HOST` | host serving the page | backend host for the dashboard |
+
+Applied by the control API on every START SIM, so every machine's sim behaves the same:
+PX4 parameters `COM_RCL_EXCEPT=4`, `SYS_FAILURE_EN=1`, `SIM_BAT_DRAIN=2400`,
+`SIM_BAT_MIN_PCT=0` (realistic 2.5 %/min battery), `SDLOG_MODE=0`, `SDLOG_PROFILE=1`.
+
+Dashboard from another computer: the dashboard talks to the host that served it, so
+run `npm run dev -- --host` on the sim machine and open `http://<sim-machine-ip>:<port>`.
+
+macOS: everything above runs; the self-healing Gazebo-window service is Linux-only
+(it needs `/proc`), so on macOS PX4's launcher opens the Gazebo window itself.
+
 ## Example prompts
 
 ```

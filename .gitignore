@@ -54,7 +54,5 @@ realFlight_logs/*
 # ---- worlds generated from real locations (rebuild with world_builder.py) ----
 aero_gcs/sim_worlds/
 
-# ---- runtime service logs (new ones; the few already tracked stay tracked) ----
-aero_gcs/backend_services/logs/*.prev
-aero_gcs/backend_services/logs/gui.log
-aero_gcs/backend_services/logs/session.log
+# ---- runtime service logs (rewritten on every run, per machine) ----
+aero_gcs/backend_services/logs/

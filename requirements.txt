@@ -3,6 +3,16 @@ jsonschema>=4.17
 pytest>=7.0
 matplotlib>=3.5        # optional: trajectory plots from the kinematic sim
 
-# Real-rig extras (install only where used):
+# Dashboard backend: control_api.py, session_service.py, log analysis, world builder
+fastapi>=0.100
+uvicorn[standard]>=0.23
+pydantic>=2.0
+numpy>=1.21,<2         # <2: the system OpenCV / ROS 2 Humble Python stack is built against numpy 1.x
+pillow>=9.0
+pymavlink>=2.4         # FLIGHT LOGS: .BIN / .tlog analysis
+
+# Needed only on the machine running the PX4 / ROS 2 sim (video_streamer.py):
+# opencv-python-headless (or the distro's python3-opencv)
+# Real-rig extras:
 # mavsdk>=1.4          # sim_bridge/mavsdk_bridge.py (PX4 SITL without ROS 2)
-# ROS 2 Humble, px4_msgs, Nav2, Gazebo Classic are apt/colcon installs — see README
+# ROS 2 Humble, px4_msgs (built from YOUR PX4 checkout's msg/), Gazebo Classic: system installs
